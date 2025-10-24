@@ -18,12 +18,14 @@ align_model = None
 language_code = None
 align_metadata = None
 
+
 def init_whisperx():
     load_whisper_model()
     load_align_model()
     load_diarize_model()
-    
-def load_whisper_model(model_name: str = 'large-v3', download_root = 'models/ASR/whisper', device='auto'):
+
+
+def load_whisper_model(model_name: str = 'large-v3', download_root='models/ASR/whisper', device='auto'):
     if model_name == 'large':
         model_name = 'large-v3'
     global whisper_model
@@ -33,9 +35,10 @@ def load_whisper_model(model_name: str = 'large-v3', download_root = 'models/ASR
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logger.info(f'Loading WhisperX model: {model_name}')
     t_start = time.time()
-    whisper_model = whisperx.load_model(model_name, download_root=download_root, device=device)
+    whisper_model = whisperx.load_model(model_name, download_root=download_root, device=device, compute_type="int8")
     t_end = time.time()
     logger.info(f'Loaded WhisperX model: {model_name} in {t_end - t_start:.2f}s')
+
 
 def load_align_model(language='en', device='auto'):
     global align_model, language_code, align_metadata
@@ -49,7 +52,8 @@ def load_align_model(language='en', device='auto'):
         language_code=language_code, device=device)
     t_end = time.time()
     logger.info(f'Loaded alignment model: {language_code} in {t_end - t_start:.2f}s')
-    
+
+
 def load_diarize_model(device='auto'):
     global diarize_model
     if diarize_model is not None:
@@ -57,7 +61,8 @@ def load_diarize_model(device='auto'):
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     t_start = time.time()
-    diarize_model = whisperx.DiarizationPipeline(use_auth_token=os.getenv('HF_TOKEN'), device=device)
+    diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=os.getenv('HF_TOKEN'), device=device)
+    # diarize_model = whisperx.DiarizationPipeline(use_auth_token=os.getenv('HF_TOKEN'), device=device)
     t_end = time.time()
     logger.info(f'Loaded diarization model in {t_end - t_start:.2f}s')
 
@@ -90,30 +95,30 @@ def transcribe_audio(folder, model_name: str = 'large', download_root='models/AS
     if os.path.exists(os.path.join(folder, 'transcript.json')):
         logger.info(f'Transcript already exists in {folder}')
         return True
-    
+
     wav_path = os.path.join(folder, 'audio_vocals.wav')
     if not os.path.exists(wav_path):
         return False
-    
+
     logger.info(f'Transcribing {wav_path}')
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     load_whisper_model(model_name, download_root, device)
     rec_result = whisper_model.transcribe(wav_path, batch_size=batch_size)
-    
+
     if rec_result['language'] == 'nn':
         logger.warning(f'No language detected in {wav_path}')
         return False
-    
+
     load_align_model(rec_result['language'])
     rec_result = whisperx.align(rec_result['segments'], align_model, align_metadata,
                                 wav_path, device, return_char_alignments=False)
-    
+
     if diarization:
         load_diarize_model(device)
         diarize_segments = diarize_model(wav_path,min_speakers=min_speakers, max_speakers=max_speakers)
         rec_result = whisperx.assign_word_speakers(diarize_segments, rec_result)
-        
+
     transcript = [{'start': segement['start'], 'end': segement['end'], 'text': segement['text'].strip(), 'speaker': segement.get('speaker', 'SPEAKER_00')} for segement in rec_result['segments']]
     transcript = merge_segments(transcript)
     with open(os.path.join(folder, 'transcript.json'), 'w', encoding='utf-8') as f:
@@ -138,12 +143,12 @@ def generate_speaker_audio(folder, transcript):
     speaker_folder = os.path.join(folder, 'SPEAKER')
     if not os.path.exists(speaker_folder):
         os.makedirs(speaker_folder)
-    
+
     for speaker, audio in speaker_dict.items():
         speaker_file_path = os.path.join(
             speaker_folder, f"{speaker}.wav")
         save_wav(audio, speaker_file_path)
-            
+
 
 def transcribe_all_audio_under_folder(folder, model_name: str = 'large', download_root='models/ASR/whisper', device='auto', batch_size=32, diarization=True, min_speakers=None, max_speakers=None):
     for root, dirs, files in os.walk(folder):
@@ -154,5 +159,3 @@ def transcribe_all_audio_under_folder(folder, model_name: str = 'large', downloa
 
 if __name__ == '__main__':
     transcribe_all_audio_under_folder('videos')
-    
-    

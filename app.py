@@ -44,7 +44,7 @@ do_everything_interface = gr.Interface(
     outputs='text',
     allow_flagging='never',
 )
-    
+
 youtube_interface = gr.Interface(
     fn=download_from_url,
     inputs=[

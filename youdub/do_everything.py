@@ -19,26 +19,26 @@ import re
 def process_video(info, root_folder, resolution, demucs_model, device, shifts, whisper_model, whisper_download_root, whisper_batch_size, whisper_diarization, whisper_min_speakers, whisper_max_speakers, translation_target_language, force_bytedance, subtitles, speed_up, fps, target_resolution, max_retries, auto_upload_video):
     # only work during 21:00-8:00
     local_time = time.localtime()
-    
+
     # while local_time.tm_hour >= 8 and local_time.tm_hour < 21:
     #     logger.info(f'Sleep because it is too early')
     #     time.sleep(600)
     #     local_time = time.localtime()
-    
+
     for retry in range(max_retries):
         try:
             folder = get_target_folder(info, root_folder)
             if folder is None:
                 logger.warning(f'Failed to get target folder for video {info["title"]}')
                 return False
-            
+
             if os.path.exists(os.path.join(folder, 'bilibili.json')):
                 with open(os.path.join(folder, 'bilibili.json'), 'r', encoding='utf-8') as f:
                     bilibili_info = json.load(f)
                 if bilibili_info['results'][0]['code'] == 0:
                     logger.info(f'Video already uploaded in {folder}')
                     return True
-                
+
             folder = download_single_video(info, root_folder, resolution)
             if folder is None:
                 logger.warning(f'Failed to download video {info["title"]}')
@@ -55,10 +55,10 @@ def process_video(info, root_folder, resolution, demucs_model, device, shifts, w
             separate_all_audio_under_folder(
                 folder, model_name=demucs_model, device=device, progress=True, shifts=shifts)
             transcribe_all_audio_under_folder(
-                folder, model_name=whisper_model, download_root=whisper_download_root, device=device, batch_size=whisper_batch_size, diarization=whisper_diarization, 
+                folder, model_name=whisper_model, download_root=whisper_download_root, device=device, batch_size=whisper_batch_size, diarization=whisper_diarization,
                 min_speakers=whisper_min_speakers,
                 max_speakers=whisper_max_speakers)
-            
+
             translate_all_transcript_under_folder(
                 folder, target_language=translation_target_language
             )
@@ -80,7 +80,7 @@ def do_everything(root_folder, url, num_videos=5, resolution='1080p', demucs_mod
 
     url = url.replace(' ', '').replace('，', '\n').replace(',', '\n')
     urls = [_ for _ in url.split('\n') if _]
-    
+
     # 使用线程池执行任务
     with ThreadPoolExecutor() as executor:
         # Submitting the tasks

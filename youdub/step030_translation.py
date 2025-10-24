@@ -18,8 +18,10 @@ if model_name == "01ai/Yi-34B-Chat-4bits":
     }
 else:
     extra_body = {
-        'repetition_penalty': 1.1,
+        #  'repetition_penalty': 1.1,
     }
+
+
 def get_necessary_info(info: dict):
     return {
         'title': info['title'],
@@ -36,6 +38,8 @@ def ensure_transcript_length(transcript, max_length=4000):
     before, after = transcript[:mid], transcript[mid:]
     length = max_length//2
     return before[:length] + after[-length:]
+
+
 def summarize(info, transcript, target_language='简体中文'):
     client = OpenAI(
     # This is the default and can be omitted
@@ -44,11 +48,11 @@ def summarize(info, transcript, target_language='简体中文'):
 )
     transcript = ' '.join(line['text'] for line in transcript)
     transcript = ensure_transcript_length(transcript, max_length=2000)
-    info_message = f'Title: "{info["title"]}" Author: "{info["uploader"]}". ' 
+    info_message = f'Title: "{info["title"]}" Author: "{info["uploader"]}". '
     # info_message = ''
-    
+
     full_description = f'The following is the full content of the video:\n{info_message}\n{transcript}\n{info_message}\nAccording to the above content, detailedly Summarize the video in JSON format:\n```json\n{{"title": "", "summary": ""}}\n```'
-    
+
     messages = [
         {'role': 'system',
             'content': f'You are a expert in the field of this video. Please detailedly summarize the video in JSON format.\n```json\n{{"title": "the title of the video", "summary", "the summary of the video"}}\n```'},
@@ -62,12 +66,19 @@ def summarize(info, transcript, target_language='简体中文'):
                 {'role': 'system', 'content': f'You are a expert in the field of this video. Please summarize the video in JSON format.\n```json\n{{"title": "the title of the video", "summary", "the summary of the video"}}\n```'},
                 {'role': 'user', 'content': full_description+retry_message},
             ]
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                timeout=240,
-                extra_body=extra_body
-            )
+            if extra_body:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    timeout=240,
+                    **extra_body
+                )
+            else:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    timeout=240
+                )
             summary = response.choices[0].message.content.replace('\n', '')
             if '视频标题' in summary:
                 raise Exception("包含“视频标题”")
@@ -88,7 +99,7 @@ def summarize(info, transcript, target_language='简体中文'):
             time.sleep(1)
     if not success:
         raise Exception(f'总结失败')
-        
+
     title = summary['title']
     summary = summary['summary']
     tags = info['tags']
@@ -139,19 +150,19 @@ def translation_postprocess(result):
     return result
 
 def valid_translation(text, translation):
-    
+
     if (translation.startswith('```') and translation.endswith('```')):
         translation = translation[3:-3]
         return True, translation_postprocess(translation)
-    
+
     if (translation.startswith('“') and translation.endswith('”')) or (translation.startswith('"') and translation.endswith('"')):
         translation = translation[1:-1]
         return True, translation_postprocess(translation)
-    
+
     if '翻译' in translation and '：“' in translation and '”' in translation:
         translation = translation.split('：“')[-1].split('”')[0]
         return True, translation_postprocess(translation)
-    
+
     if '翻译' in translation and '："' in translation and '"' in translation:
         translation = translation.split('："')[-1].split('"')[0]
         return True, translation_postprocess(translation)
@@ -159,28 +170,28 @@ def valid_translation(text, translation):
     if '翻译' in translation and ':"' in translation and '"' in translation:
         translation = translation.split('："')[-1].split('"')[0]
         return True, translation_postprocess(translation)
-    
+
     if len(text) <= 10:
         if len(translation) > 15:
             return False, f'Only translate the following sentence and give me the result.'
     elif len(translation) > len(text)*0.75:
         return False, f'The translation is too long. Only translate the following sentence and give me the result.'
-    
+
     forbidden = ['翻译', '这句', '\n', '简体中文', '中文', 'translate', 'Translate', 'translation', 'Translation']
     translation = translation.strip()
     for word in forbidden:
         if word in translation:
-            
+
             return False, f"Don't include `{word}` in the translation. Only translate the following sentence and give me the result."
-    
+
     return True, translation_postprocess(translation)
 # def split_sentences(translation, punctuations=['。', '？', '！', '\n', '”', '"']):
 #     def is_punctuation(char):
 #         return char in punctuations
-    
+
 #     output_data = []
 #     for item in translation:
-#         start = item['start'] 
+#         start = item['start']
 #         text = item['text']
 #         speaker = item['speaker']
 #         translation = item['translation']
@@ -249,7 +260,7 @@ def split_sentences(translation):
             start = sentence_end
             sentence_start += len(sentence)
     return output_data
-    
+
 def _translate(summary, transcript, target_language='简体中文'):
     client = OpenAI(
         # This is the default and can be omitted
@@ -264,18 +275,18 @@ def _translate(summary, transcript, target_language='简体中文'):
         {'role': 'assistant', 'content': '翻译：“知识就是力量。”'},
         {'role': 'user', 'content': '使用地道的中文Translate:"To be or not to be, that is the question."'},
         {'role': 'assistant', 'content': '翻译：“生存还是毁灭，这是一个值得考虑的问题。”'},]
-    
+
     history = []
     for line in transcript:
         text = line['text']
         # history = ''.join(full_translation[:-10])
-        
+
         retry_message = 'Only translate the quoted sentence and give me the final translation.'
         for retry in range(30):
             messages = fixed_message + \
                 history[-30:] + [{'role': 'user',
                                   'content': f'使用地道的中文Translate:"{text}"'}]
-            
+
             try:
                 response = client.chat.completions.create(
                     model=model_name,
@@ -313,7 +324,7 @@ def translate(folder, target_language='简体中文'):
     if os.path.exists(os.path.join(folder, 'translation.json')):
         logger.info(f'Translation already exists in {folder}')
         return True
-    
+
     info_path = os.path.join(folder, 'download.info.json')
     if not os.path.exists(info_path):
         return False
@@ -321,11 +332,11 @@ def translate(folder, target_language='简体中文'):
     with open(info_path, 'r', encoding='utf-8') as f:
         info = json.load(f)
     info = get_necessary_info(info)
-    
+
     transcript_path = os.path.join(folder, 'transcript.json')
     with open(transcript_path, 'r', encoding='utf-8') as f:
         transcript = json.load(f)
-    
+
     summary_path = os.path.join(folder, 'summary.json')
     if os.path.exists(summary_path):
         summary = json.load(open(summary_path, 'r', encoding='utf-8'))

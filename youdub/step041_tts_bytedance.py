@@ -59,9 +59,11 @@ embedding_model = Model.from_pretrained(
 embedding_inference = Inference(
     embedding_model, window="whole")
 
+
 def generate_embedding(wav_path):
     embedding = embedding_inference(wav_path)
     return embedding
+
 
 def generate_speaker_to_voice_type(folder):
     speaker_to_voice_type_path = os.path.join(folder, 'speaker_to_voice_type.json')
@@ -69,7 +71,7 @@ def generate_speaker_to_voice_type(folder):
         with open(speaker_to_voice_type_path, 'r', encoding='utf-8') as f:
             speaker_to_voice_type = json.load(f)
         return speaker_to_voice_type
-    
+
     speaker_to_voice_type = {}
     speaker_folder = os.path.join(folder, 'SPEAKER')
     voice_types = {}
@@ -78,14 +80,14 @@ def generate_speaker_to_voice_type(folder):
     for file in os.listdir('voice_type'):
         voice_type = file.replace('.wav', '')
         voice_types[voice_type] = np.load(f'voice_type/{file.replace(".wav", ".npy")}')
-        
+
     for file in os.listdir(speaker_folder):
         if not file.endswith('.wav'):
             continue
         speaker = file.replace('.wav', '')
         wav_path = os.path.join(speaker_folder, file)
         embedding = generate_embedding(wav_path)
-        # find the 
+        # find the
         np.save(wav_path.replace('.wav', '.npy'), embedding)
         speaker_to_voice_type[speaker] = sorted(voice_types.keys(), key=lambda x: 1 - cosine(voice_types[x], embedding))[0]
     for k, v in speaker_to_voice_type.items():
@@ -95,7 +97,7 @@ def generate_speaker_to_voice_type(folder):
     with open(speaker_to_voice_type_path, 'w', encoding='utf-8') as f:
         json.dump(speaker_to_voice_type, f, indent=2, ensure_ascii=False)
     return speaker_to_voice_type
-    
+
 
 def tts(text, output_path, speaker_wav, voice_type=None):
     if os.path.exists(output_path):
@@ -120,7 +122,7 @@ def tts(text, output_path, speaker_wav, voice_type=None):
                     f.write(base64.b64decode(data))
                 # file_to_save = open(output_path, "wb")
                 # file_to_save.write(base64.b64decode(data))
-                
+
                 # ensure the file is saved
                 wav, sample_rate = librosa.load(output_path, sr=24000)
                 logger.info(f'火山TTS {text} 保存成功: {output_path}')
@@ -128,6 +130,7 @@ def tts(text, output_path, speaker_wav, voice_type=None):
                 break
         except Exception as e:
             logger.warning(e)
+
 
 def get_available_speakers():
     if not os.path.exists('voice_type'):
@@ -148,8 +151,9 @@ def get_available_speakers():
                 logger.warning(e)
                 retry -= 1
                 time.sleep(0.1)
-        
+
+
 if __name__ == '__main__':
-    # tts('你好，你叫什么名字？', f'videos\Lex Clips\20231222 Jeff Bezos on fear of death ｜ Lex Fridman Podcast Clips\wavs\{str(uuid.uuid4())}.wav',
-    #     r'videos\Lex Clips\20231222 Jeff Bezos on fear of death ｜ Lex Fridman Podcast Clips\SPEAKER\SPEAKER_01.wav')
+    tts('你好，你叫什么名字？', f'videos\Lex Clips\20231222 Jeff Bezos on fear of death ｜ Lex Fridman Podcast Clips\wavs\{str(uuid.uuid4())}.wav',
+        r'videos\Lex Clips\20231222 Jeff Bezos on fear of death ｜ Lex Fridman Podcast Clips\SPEAKER\SPEAKER_01.wav')
     get_available_speakers()
