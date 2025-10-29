@@ -10,7 +10,16 @@ from loguru import logger
 load_dotenv()
 
 model_name = os.getenv('MODEL_NAME', 'gpt-3.5-turbo')
-print(f'using model {model_name}')
+api_base = os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1')
+api_key = os.getenv('OPENAI_API_KEY', '')
+
+logger.info(f'Translation module loaded')
+logger.info(f'Using model: {model_name}')
+logger.info(f'API base: {api_base}')
+logger.info(f'API key configured: {"Yes" if api_key else "No"}')
+
+if not api_key:
+    logger.error('⚠️ OPENAI_API_KEY is not set in environment variables!')
 if model_name == "01ai/Yi-34B-Chat-4bits":
     extra_body = {
         'repetition_penalty': 1.1,
@@ -33,10 +42,24 @@ def get_necessary_info(info: dict):
     }
 
 
-def ensure_transcript_length(transcript, max_length=4000):
-    mid = len(transcript)//2
+def ensure_transcript_length(transcript, max_length=2000):
+    """确保转录文本长度不超过限制，避免触发内容过滤
+    
+    Args:
+        transcript: 转录文本
+        max_length: 最大长度（字符数）
+        
+    Returns:
+        截断后的转录文本
+    """
+    # 如果文本较短，直接返回
+    if len(transcript) <= max_length:
+        return transcript
+    
+    # 取开头和结尾，跳过中间部分
+    mid = len(transcript) // 2
     before, after = transcript[:mid], transcript[mid:]
-    length = max_length//2
+    length = max_length // 2
     return before[:length] + after[-length:]
 
 
@@ -47,11 +70,23 @@ def summarize(info, transcript, target_language='简体中文'):
     api_key=os.getenv('OPENAI_API_KEY')
 )
     transcript = ' '.join(line['text'] for line in transcript)
-    transcript = ensure_transcript_length(transcript, max_length=2000)
+    transcript = ensure_transcript_length(transcript, max_length=1500)  # 减少长度避免内容过滤
+    
+    # 清理可能触发过滤器的内容
+    transcript = transcript.replace('\n', ' ').strip()
+    
     info_message = f'Title: "{info["title"]}" Author: "{info["uploader"]}". '
-    # info_message = ''
 
-    full_description = f'The following is the full content of the video:\n{info_message}\n{transcript}\n{info_message}\nAccording to the above content, detailedly Summarize the video in JSON format:\n```json\n{{"title": "", "summary": ""}}\n```'
+    full_description = f'''Video information:
+{info_message}
+
+Video excerpt (partial transcript):
+{transcript}
+
+Please create a brief summary in JSON format:
+```json
+{{"title": "video title here", "summary": "brief video summary here"}}
+```'''
 
     messages = [
         {'role': 'system',
@@ -66,6 +101,9 @@ def summarize(info, transcript, target_language='简体中文'):
                 {'role': 'system', 'content': f'You are a expert in the field of this video. Please summarize the video in JSON format.\n```json\n{{"title": "the title of the video", "summary", "the summary of the video"}}\n```'},
                 {'role': 'user', 'content': full_description+retry_message},
             ]
+            
+            logger.info(f'正在调用 OpenAI API, 模型: {model_name}')
+            
             if extra_body:
                 response = client.chat.completions.create(
                     model=model_name,
@@ -79,23 +117,57 @@ def summarize(info, transcript, target_language='简体中文'):
                     messages=messages,
                     timeout=240
                 )
-            summary = response.choices[0].message.content.replace('\n', '')
+            
+            # 详细记录响应信息
+            finish_reason = response.choices[0].finish_reason
+            logger.info(f'API 响应模型: {response.model}')
+            logger.info(f'Finish reason: {finish_reason}')
+            
+            # 特殊处理内容过滤
+            if finish_reason == 'content_filter':
+                logger.warning('⚠️ 内容被 OpenAI 过滤器拦截')
+                logger.warning('尝试使用更简短的转录内容...')
+                # 大幅缩短转录内容
+                short_transcript = ' '.join(line['text'] for line in transcript[:10])  # 只取前10句
+                info_message = f'Title: "{info["title"]}" Author: "{info["uploader"]}". '
+                full_description = f'The following is a brief excerpt from the video:\n{info_message}\n{short_transcript}\n\nSummarize in JSON format:\n```json\n{{"title": "", "summary": ""}}\n```'
+                messages[1]['content'] = full_description
+                raise Exception('内容过滤，使用简短版本重试')
+            
+            summary = response.choices[0].message.content
+            if not summary:
+                logger.error('API 返回内容为空！')
+                logger.error(f'完整响应对象: {response}')
+                raise Exception('API 返回的内容为空')
+            
+            summary = summary.replace('\n', '')
             if '视频标题' in summary:
-                raise Exception("包含“视频标题”")
-            logger.info(summary)
-            summary = re.findall(r'\{.*?\}', summary)[0]
+                raise Exception('包含"视频标题"关键词')
+            logger.info(f'AI 返回内容: {summary}')
+            
+            # 查找 JSON 格式
+            json_matches = re.findall(r'\{.*?\}', summary, re.DOTALL)
+            if not json_matches:
+                logger.warning(f'未找到 JSON 格式，原始响应: {summary}')
+                raise Exception("响应中没有找到 JSON 格式")
+            
+            summary = json_matches[0]
             summary = json.loads(summary)
             summary = {
-                'title': summary['title'].replace('title:', '').strip(),
-                'summary': summary['summary'].replace('summary:', '').strip()
+                'title': summary.get('title', '').replace('title:', '').strip(),
+                'summary': summary.get('summary', '').replace('summary:', '').strip()
             }
-            if 'title' in summary['title']:
-                raise Exception('Invalid summary')
+            
+            if not summary['title'] or 'title' in summary['title']:
+                raise Exception('Invalid summary title')
+            if not summary['summary']:
+                raise Exception('Invalid summary content')
+                
             success = True
             break
         except Exception as e:
             retry_message += '\nSummarize the video in JSON format:\n```json\n{"title": "", "summary": ""}\n```'
-            logger.warning(f'总结失败\n{e}')
+            logger.warning(f'总结失败 (尝试 {retry + 1}/5): {e}')
             time.sleep(1)
     if not success:
         raise Exception(f'总结失败')
@@ -109,7 +181,8 @@ def summarize(info, transcript, target_language='简体中文'):
         {'role': 'user',
             'content': f'The title of the video is "{title}". The summary of the video is "{summary}". Tags: {tags}.\nPlease translate the above title and summary and tags into {target_language} in JSON format. ```json\n{{"title": "", "summary", ""， "tags": []}}\n```. Remember to tranlate the title and the summary and tags into {target_language} in JSON.'},
     ]
-    while True:
+    max_translation_retries = 10
+    for retry in range(max_translation_retries):
         try:
             response = client.chat.completions.create(
                 model=model_name,
@@ -118,25 +191,50 @@ def summarize(info, transcript, target_language='简体中文'):
                 extra_body=extra_body
             )
             summary = response.choices[0].message.content.replace('\n', '')
-            logger.info(summary)
-            summary = re.findall(r'\{.*?\}', summary)[0]
+            logger.info(f'AI 翻译返回内容: {summary}')
+            
+            # 查找 JSON 格式
+            json_matches = re.findall(r'\{.*?\}', summary, re.DOTALL)
+            if not json_matches:
+                logger.warning(f'未找到 JSON 格式，原始响应: {summary}')
+                raise Exception("翻译响应中没有找到 JSON 格式")
+            
+            summary = json_matches[0]
             summary = json.loads(summary)
-            if target_language in summary['title'] or target_language in summary['summary']:
-                raise Exception('Invalid translation')
-            title = summary['title'].strip()
-            if (title.startswith('"') and title.endswith('"')) or (title.startswith('“') and title.endswith('”')) or (title.startswith('‘') and title.endswith('’')) or (title.startswith("'") and title.endswith("'")) or (title.startswith('《') and title.endswith('》')):
+            
+            if target_language in summary.get('title', '') or target_language in summary.get('summary', ''):
+                raise Exception('Invalid translation: contains target language name')
+            
+            title = summary.get('title', '').strip()
+            if not title:
+                raise Exception('Translation title is empty')
+                
+            # 去除引号
+            if (title.startswith('"') and title.endswith('"')) or \
+               (title.startswith('"') and title.endswith('"')) or \
+               (title.startswith(''') and title.endswith(''')) or \
+               (title.startswith("'") and title.endswith("'")) or \
+               (title.startswith('《') and title.endswith('》')):
                 title = title[1:-1]
+            
             result = {
                 'title': title,
                 'author': info['uploader'],
-                'summary': summary['summary'],
-                'tags': summary['tags'],
+                'summary': summary.get('summary', ''),
+                'tags': summary.get('tags', []),
                 'language': target_language
             }
+            
+            logger.info(f'翻译成功: {result["title"]}')
             return result
+            
         except Exception as e:
-            logger.warning(f'总结翻译失败\n{e}')
-            time.sleep(1)
+            logger.warning(f'总结翻译失败 (尝试 {retry + 1}/{max_translation_retries}): {e}')
+            time.sleep(2)
+    
+    # 如果所有重试都失败，返回一个默认的结果
+    logger.error('翻译多次失败，使用默认值')
+    raise Exception(f'翻译失败，已重试 {max_translation_retries} 次')
 
 
 def translation_postprocess(result):
@@ -179,9 +277,13 @@ def valid_translation(text, translation):
 
     forbidden = ['翻译', '这句', '\n', '简体中文', '中文', 'translate', 'Translate', 'translation', 'Translation']
     translation = translation.strip()
+    
+    # 检查是否为空
+    if not translation:
+        return False, f'Translation is empty. Please provide the translation.'
+    
     for word in forbidden:
         if word in translation:
-
             return False, f"Don't include `{word}` in the translation. Only translate the following sentence and give me the result."
 
     return True, translation_postprocess(translation)
@@ -234,17 +336,61 @@ def split_text_into_sentences(para):
     return para.split("\n")
 
 def split_sentences(translation):
+    """将翻译结果按句子分割
+    
+    Args:
+        translation: 翻译结果列表
+        
+    Returns:
+        分句后的翻译结果列表
+    """
     output_data = []
     for item in translation:
         start = item['start']
         text = item['text']
         speaker = item['speaker']
-        translation_text = item['translation']
+        translation_text = item.get('translation', '')
+        
+        # 清理翻译文本（移除空白字符）
+        if translation_text:
+            translation_text = translation_text.strip()
+        
+        # 检查翻译是否为空（包括空字符串、None、只有空白字符）
+        if not translation_text:
+            logger.warning(f'翻译为空，使用原文: {text[:50]}...')
+            # 使用原文作为备用
+            output_data.append({
+                "start": round(start, 3),
+                "end": round(item['end'], 3),
+                "text": text,
+                "speaker": speaker,
+                "translation": text  # 使用原文作为备用
+            })
+            continue
+        
+        # 分句处理
         sentences = split_text_into_sentences(translation_text)
-        duration_per_char = (item['end'] - item['start']
-                             ) / len(translation_text)
+        
+        # 再次检查长度（防御性编程）
+        text_length = len(translation_text)
+        if text_length == 0:
+            logger.error(f'意外的空翻译: {item}')
+            output_data.append({
+                "start": round(start, 3),
+                "end": round(item['end'], 3),
+                "text": text,
+                "speaker": speaker,
+                "translation": text
+            })
+            continue
+        
+        duration_per_char = (item['end'] - item['start']) / text_length
         sentence_start = 0
+        
         for sentence in sentences:
+            if not sentence or not sentence.strip():  # 跳过空句子
+                continue
+                
             sentence_end = start + duration_per_char * len(sentence)
 
             # Append the new item
@@ -253,12 +399,13 @@ def split_sentences(translation):
                 "end": round(sentence_end, 3),
                 "text": text,
                 "speaker": speaker,
-                "translation": sentence
+                "translation": sentence.strip()
             })
 
             # Update the start for the next sentence
             start = sentence_end
             sentence_start += len(sentence)
+    
     return output_data
 
 def _translate(summary, transcript, target_language='简体中文'):
@@ -279,13 +426,39 @@ def _translate(summary, transcript, target_language='简体中文'):
     history = []
     for line in transcript:
         text = line['text']
-        # history = ''.join(full_translation[:-10])
+        original_text = text
+        
+        # 策略1: 预处理异常文本（大量重复字符）
+        # 检测是否有异常长的重复字符序列
+        if len(text) > 200:
+            # 检查是否有超过10个连续重复的字符
+            import re
+            repeated_pattern = re.search(r'(.)\1{10,}', text)
+            if repeated_pattern:
+                # 简化重复字符为最多3个
+                text = re.sub(r'(.)\1{3,}', r'\1\1\1', text)
+                logger.warning(f'检测到大量重复字符，已简化: {original_text[:50]}... -> {text[:50]}...')
 
         retry_message = 'Only translate the quoted sentence and give me the final translation.'
-        for retry in range(30):
-            messages = fixed_message + \
-                history[-30:] + [{'role': 'user',
-                                  'content': f'使用地道的中文Translate:"{text}"'}]
+        translation = None
+        
+        for retry in range(5):
+            # 策略2: 根据重试次数调整策略
+            if retry == 0:
+                # 第一次：正常翻译
+                user_content = f'使用地道的中文Translate:"{text}"'
+            elif retry == 1:
+                # 第二次：简化提示
+                user_content = f'Translate to Chinese: {text}'
+            elif retry == 2:
+                # 第三次：更直接的指令
+                user_content = f'请翻译成中文：{text}'
+            else:
+                # 第四、五次：截短文本重试
+                truncated = text[:100] if len(text) > 100 else text
+                user_content = f'翻译：{truncated}'
+            
+            messages = fixed_message + history[-30:] + [{'role': 'user', 'content': user_content}]
 
             try:
                 response = client.chat.completions.create(
@@ -294,28 +467,49 @@ def _translate(summary, transcript, target_language='简体中文'):
                     timeout=240,
                     extra_body=extra_body
                 )
-                translation = response.choices[0].message.content.replace('\n', '')
-                logger.info(f'原文：{text}')
+                
+                # 策略3: 检查 finish_reason
+                finish_reason = response.choices[0].finish_reason
+                if finish_reason == 'content_filter':
+                    logger.warning(f'内容被过滤 (content_filter)，尝试简化文本')
+                    # 大幅简化文本
+                    text = text[:50] if len(text) > 50 else text
+                    raise Exception('Content filtered, retry with shorter text')
+                
+                translation = response.choices[0].message.content
+                if translation:
+                    translation = translation.replace('\n', '')
+                
+                logger.info(f'原文：{original_text[:100]}...' if len(original_text) > 100 else f'原文：{original_text}')
                 logger.info(f'译文：{translation}')
-                success, translation = valid_translation(text, translation)
+                
+                # 检查是否为空响应
+                if not translation or not translation.strip():
+                    logger.warning(f'AI 返回空响应，重试 {retry + 1}/5')
+                    raise Exception('Empty translation response')
+                
+                success, translation = valid_translation(original_text, translation)
                 if not success:
                     retry_message += translation
                     raise Exception('Invalid translation')
                 break
             except Exception as e:
-                logger.error(e)
-                if e == 'Internal Server Error':
+                logger.error(f'翻译失败 (尝试 {retry + 1}/5): {e}')
+                if str(e) == 'Internal Server Error':
                     client = OpenAI(
-                        # This is the default and can be omitted
-                        base_url=os.getenv(
-                            'OPENAI_API_BASE', 'https://api.openai.com/v1'),
+                        base_url=os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1'),
                         api_key=os.getenv('OPENAI_API_KEY')
                     )
-                # logger.warning('翻译失败')
                 time.sleep(1)
+        
+        # 策略4: 如果5次重试后仍然失败，使用原文作为后备
+        if translation is None or not translation.strip():
+            logger.warning(f'翻译失败5次，使用原文作为后备: {original_text[:50]}...')
+            translation = original_text
+        
         full_translation.append(translation)
-        history.append({'role': 'user', 'content': f'Translate:"{text}"'})
-        history.append({'role': 'assistant', 'content': f'翻译：“{translation}”'})
+        history.append({'role': 'user', 'content': f'Translate:"{original_text}"'})
+        history.append({'role': 'assistant', 'content': f'翻译："{translation}"'})
         time.sleep(0.1)
 
     return full_translation

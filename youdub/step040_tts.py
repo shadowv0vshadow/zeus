@@ -1,46 +1,104 @@
+"""TTS（文本转语音）模块
+
+该模块提供文本转语音功能，支持：
+- 字节跳动 TTS
+- XTTS 模型
+- 音频时长调整
+"""
+
 import json
 import os
 import re
+from typing import List, Dict, Any
+
 import librosa
-
-from loguru import logger
 import numpy as np
+from audiostretchy.stretch import stretch_audio
+from loguru import logger
 
-from .utils import save_wav, save_wav_norm
+from .cn_tx import TextNorm
 from .step041_tts_bytedance import tts as bytedance_tts
 from .step042_tts_xtts import tts as xtts_tts
-from .cn_tx import TextNorm
-from audiostretchy.stretch import stretch_audio
+from .utils import save_wav, save_wav_norm
+
+# 初始化文本规范化器
 normalizer = TextNorm()
 
 
-def preprocess_text(text):
+def preprocess_text(text: str) -> str:
+    """预处理文本，进行规范化
+    
+    Args:
+        text: 原始文本
+        
+    Returns:
+        处理后的文本
+    """
+    # 替换特殊词汇
     text = text.replace('AI', '人工智能')
+    
+    # 在大写字母前插入空格（除了开头）
     text = re.sub(r'(?<!^)([A-Z])', r' \1', text)
+    
+    # 文本规范化
     text = normalizer(text)
-    # 使用正则表达式在字母和数字之间插入空格
+    
+    # 在字母和数字之间插入空格
     text = re.sub(r'(?<=[a-zA-Z])(?=\d)|(?<=\d)(?=[a-zA-Z])', ' ', text)
+    
     return text
 
 
-def adjust_audio_length(wav_path, desired_length, sample_rate=24000, min_speed_factor=0.6, max_speed_factor=1.1):
+def adjust_audio_length(
+    wav_path: str,
+    desired_length: float,
+    sample_rate: int = 24000,
+    min_speed_factor: float = 0.6,
+    max_speed_factor: float = 1.1
+) -> tuple:
+    """调整音频长度以匹配目标时长
+    
+    Args:
+        wav_path: 音频文件路径
+        desired_length: 目标时长（秒）
+        sample_rate: 采样率
+        min_speed_factor: 最小速度因子
+        max_speed_factor: 最大速度因子
+        
+    Returns:
+        (调整后的音频数据, 实际时长)
+    """
     wav, sample_rate = librosa.load(wav_path, sr=sample_rate)
-    current_length = len(wav)/sample_rate
-    speed_factor = max(
-        min(desired_length / current_length, max_speed_factor), min_speed_factor)
-    desired_length = current_length * speed_factor
+    current_length = len(wav) / sample_rate
+    
+    # 计算速度因子，限制在合理范围内
+    speed_factor = desired_length / current_length
+    speed_factor = max(min(speed_factor, max_speed_factor), min_speed_factor)
+    
+    actual_length = current_length * speed_factor
     target_path = wav_path.replace('.wav', '_adjusted.wav')
+    
+    # 拉伸音频
     stretch_audio(wav_path, target_path, ratio=speed_factor, sample_rate=sample_rate)
+    
+    # 重新加载调整后的音频
     wav, sample_rate = librosa.load(target_path, sr=sample_rate)
-    return wav[:int(desired_length*sample_rate)], desired_length
+    
+    # 截取到目标长度
+    target_samples = int(actual_length * sample_rate)
+    return wav[:target_samples], actual_length
 
 
-def generate_wavs(folder, force_bytedance=False):
-    print("xxxx")
+def generate_wavs(folder: str, force_bytedance: bool = False) -> None:
+    """生成所有片段的语音
+    
+    Args:
+        folder: 工作文件夹路径
+        force_bytedance: 是否强制使用字节跳动 TTS
+    """
     transcript_path = os.path.join(folder, 'translation.json')
     output_folder = os.path.join(folder, 'wavs')
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
+    os.makedirs(output_folder, exist_ok=True)
     with open(transcript_path, 'r', encoding='utf-8') as f:
         transcript = json.load(f)
     speakers = set()
@@ -108,13 +166,32 @@ def generate_wavs(folder, force_bytedance=False):
     logger.info(f'Generated {os.path.join(folder, "audio_combined.wav")}')
 
 
-def generate_all_wavs_under_folder(root_folder, force_bytedance=False):
+def generate_all_wavs_under_folder(root_folder: str, force_bytedance: bool = False) -> str:
+    """为指定文件夹下的所有翻译生成语音
+    
+    Args:
+        root_folder: 根文件夹路径
+        force_bytedance: 是否强制使用字节跳动 TTS
+        
+    Returns:
+        处理结果描述
+    """
+    logger.info(f'Starting TTS generation for all translations under: {root_folder}')
+    generated_count = 0
+    
     for root, dirs, files in os.walk(root_folder):
         if 'translation.json' in files and 'audio_combined.wav' not in files:
-            generate_wavs(root, force_bytedance)
-    return f'Generated all wavs under {root_folder}'
+            try:
+                generate_wavs(root, force_bytedance)
+                generated_count += 1
+            except Exception as e:
+                logger.error(f'Failed to generate wavs in {root}: {e}')
+    
+    result_msg = f'Generated wavs for {generated_count} videos under {root_folder}'
+    logger.info(result_msg)
+    return result_msg
 
 
 if __name__ == '__main__':
-    folder = r'videos\TED-Ed\20211214 Would you raise the bird that murdered your children？ - Steve Rothstein'
-    generate_wavs(folder, force_bytedance=False)
+    test_folder = r'videos\TED-Ed\20211214 Would you raise the bird that murdered your children？ - Steve Rothstein'
+    generate_wavs(test_folder, force_bytedance=False)

@@ -1,147 +1,201 @@
+"""Bilibili 上传模块
+
+该模块提供视频上传到 Bilibili 的功能
+"""
+
 import json
 import os
+import time
+from typing import Dict, Any, Optional
+
+from bilibili_toolman.bilisession.web import BiliSession
+from bilibili_toolman.bilisession.common.submission import Submission
 from dotenv import load_dotenv
 from loguru import logger
-import asyncio
-import logging
-from bilibili_api import Credential
-from bilibili_api import video_uploader
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
-
 
 load_dotenv()
 
 
-async def upload_video_async(folder):
+def bili_login() -> BiliSession:
+    """登录 Bilibili
+    
+    Returns:
+        BiliSession 对象
+        
+    Raises:
+        Exception: 登录失败时抛出异常
     """
-    【已修正】使用 bilibili-api-python 的 video_uploader 模块异步上传视频。
+    sessdata = os.getenv('BILI_SESSDATA')
+    bili_jct = os.getenv('BILI_BILI_JCT')
+    
+    if not sessdata or not bili_jct:
+        raise Exception('BILI_SESSDATA 和 BILI_BILI_JCT 环境变量未设置')
+    
+    try:
+        session = BiliSession(f'SESSDATA={sessdata};bili_jct={bili_jct}')
+        logger.info("Bilibili 登录成功")
+        return session
+    except Exception as e:
+        logger.error(f'Bilibili 登录失败: {e}')
+        raise Exception('Bilibili 登录失败，请检查 SESSDATA 和 bili_jct 是否正确')
+
+def upload_video(folder: str) -> bool:
+    """上传视频到 Bilibili
+    
+    Args:
+        folder: 视频文件所在文件夹
+        
+    Returns:
+        是否上传成功
+        
+    Raises:
+        Exception: 上传失败时抛出异常
     """
-    # 检查是否已上传
     submission_result_path = os.path.join(folder, 'bilibili.json')
+    
+    # 检查是否已经上传
     if os.path.exists(submission_result_path):
         with open(submission_result_path, 'r', encoding='utf-8') as f:
             submission_result = json.load(f)
-        # 根据文档，成功后返回的字典包含 bvid 和 aid
-        if submission_result.get('bvid'):
-            logger.info(f'视频 {folder} 已上传过 (bvid: {submission_result["bvid"]})，跳过。')
+        if submission_result.get('results', [{}])[0].get('code') == 0:
+            logger.info(f'Video already uploaded: {folder}')
             return True
 
-    # --- 1. 准备登录凭证 ---
-    SESSDATA = os.getenv('BILI_SESSDATA')
-    BILI_JCT = os.getenv('BILI_BILI_JCT')
-    if not SESSDATA or not BILI_JCT:
-        raise Exception('环境变量 BILI_SESSDATA 和 BILI_BILI_JCT 未设置。')
-    credential = Credential(sessdata=SESSDATA, bili_jct=BILI_JCT)
-
-    # --- 2. 准备文件路径和稿件信息 ---
+    # 检查必需的文件
     video_path = os.path.join(folder, 'video.mp4')
     cover_path = os.path.join(folder, 'video.png')
-    if not os.path.exists(video_path):
-        logger.error(f"视频文件不存在: {video_path}")
-        return False
+    summary_path = os.path.join(folder, 'summary.json')
+    info_path = os.path.join(folder, 'download.info.json')
+    
+    for path in [video_path, cover_path, summary_path, info_path]:
+        if not os.path.exists(path):
+            logger.error(f'Required file not found: {path}')
+            return False
 
-    with open(os.path.join(folder, 'summary.json'), 'r', encoding='utf-8') as f:
+    # 加载摘要数据
+    with open(summary_path, 'r', encoding='utf-8') as f:
         summary = json.load(f)
-    summary['title'] = summary['title'].replace('视频标题：', '').strip()
-    summary['summary'] = summary['summary'].replace('视频摘要：', '').replace('视频简介：', '').strip()
-
-    with open(os.path.join(folder, 'download.info.json'), 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    title = f'【中配】{summary["title"]} - {summary["author"]}'
-    webpage_url = data['webpage_url']
+    
+    # 清理标题和摘要
+    video_title = summary.get('title', '').replace('视频标题：', '').strip()
+    video_summary = summary.get('summary', '').replace(
+        '视频摘要：', '').replace('视频简介：', '').strip()
+    author = summary.get('author', 'Unknown')
+    tags = summary.get('tags', [])
+    
+    if not isinstance(tags, list):
+        tags = []
+    
+    # 构建标题
+    title = f'【中配】{video_title} - {author}'
+    
+    # 加载原视频信息
+    with open(info_path, 'r', encoding='utf-8') as f:
+        video_info = json.load(f)
+    
+    title_english = video_info.get('title', '')
+    webpage_url = video_info.get('webpage_url', '')
+    
+    # 构建描述
     description = (
-        f"{data['title']}\n"
-        f"{summary['summary']}\n\n"
-        "项目地址：https://github.com/liuzhao1225/YouDub-webui\n"
-        "YouDub 是一个开创性的开源工具，旨在将 YouTube 和其他平台上的高质量视频翻译和配音成中文版本。"
+        f'{title_english}\n'
+        f'{video_summary}\n\n'
+        f'项目地址：https://github.com/liuzhao1225/YouDub-webui\n'
+        f'YouDub 是一个开创性的开源工具，旨在将 YouTube 和其他平台上的高质量视频'
+        f'翻译和配音成中文版本。该工具结合了最新的 AI 技术，包括语音识别、'
+        f'大型语言模型翻译，以及 AI 声音克隆技术，提供与原视频相似的中文配音，'
+        f'为中文用户提供卓越的观看体验。'
     )
 
-    raw_tags = summary.get('tags', [])
-    if not isinstance(raw_tags, list): raw_tags = []
+    # 登录 Bilibili
+    session = bili_login()
 
-    tags = ['YouDub', summary["author"], 'AI', 'ChatGPT'] + raw_tags + ['中文配音', '科学', '科普']
-    final_tags = list(dict.fromkeys([tag[:20] for tag in tags])) # 去重并截断
-
-    # --- 3. 【修正】根据文档创建上传任务 ---
-    for retry in range(5):
+    # 提交视频（最多重试 5 次）
+    max_retries = 5
+    for retry in range(max_retries):
         try:
-            # 3.1 创建分P对象 (VideoUploaderPage)
-            # 你的场景是单P视频
-            video_page = video_uploader.VideoUploaderPage(
-                path=video_path,
-                title=title,
-                description="" # 分P简介，可留空
+            logger.info(f'Uploading video (attempt {retry + 1}/{max_retries})')
+            
+            # 上传视频文件
+            video_endpoint, _ = session.UploadVideo(video_path)
+
+            # 创建投稿对象
+            submission = Submission(title=title, desc=description)
+
+            # 添加视频
+            submission.videos.append(
+                Submission(title=title, video_endpoint=video_endpoint)
             )
 
-            # 3.2 创建稿件元数据对象 (VideoMeta)
-            # 根据文档，copyright=2 (转载) 对应 original=False
-            video_meta = video_uploader.VideoMeta(
-                tid=201,             # 分区ID, 201 为科技 -> 科普
-                title=title,
-                original=False,      # 设为 False 表示转载
-                source=webpage_url,  # 非原创时提供转载来源
-                desc=description,
-                tags=final_tags[:12],
-                cover=cover_path,    # 封面路径直接在这里传入
-                dynamic=f"【视频更新】{title}" # 粉丝动态
-            )
+            # 上传并设置封面
+            submission.cover_url = session.UploadCover(cover_path)
 
-            # 3.3 创建上传器对象 (VideoUploader)
-            uploader = video_uploader.VideoUploader(
-                pages=[video_page],
-                meta=video_meta,
-                credential=credential
-            )
-
-            # (可选) 监听上传事件，打印进度
-            @uploader.on("start")
-            async def on_start():
-                logger.info("上传任务开始")
-
-            @uploader.on("progress")
-            async def on_progress(page_idx, total_size, finished_size):
-                percent = finished_size / total_size * 100
-                logger.info(f"分P {page_idx+1} 上传进度: {percent:.2f}%")
-
-            @uploader.on("completed")
-            async def on_completed(result):
-                logger.info(f"上传任务完成: {result}")
-
-            # 3.4 启动上传
-            submit_result = await uploader.start()
-
-            # 保存成功结果
+            # 设置标签
+            all_tags = ['YouDub', author, 'AI', 'ChatGPT'] + tags + ['中文配音', '科学', '科普']
+            for tag in all_tags[:12]:  # Bilibili 限制最多 12 个标签
+                # 标签长度限制为 20 个字符
+                tag = tag[:20] if len(tag) > 20 else tag
+                submission.tags.append(tag)
+            
+            # 设置分区（科普类）
+            submission.thread = 201
+            
+            # 设置版权（转载）
+            submission.copyright = submission.COPYRIGHT_REUPLOAD
+            submission.source = webpage_url
+            
+            # 提交投稿
+            response = session.SubmitSubmission(submission, seperate_parts=False)
+            
+            # 检查返回结果
+            if response.get('results', [{}])[0].get('code') != 0:
+                logger.error(f'Submission failed: {response}')
+                raise Exception(f'Submission returned error code: {response}')
+            
+            logger.info(f"Submission successful: {response}")
+            
+            # 保存结果
             with open(submission_result_path, 'w', encoding='utf-8') as f:
-                json.dump(submit_result, f, ensure_ascii=False, indent=4)
+                json.dump(response, f, ensure_ascii=False, indent=4)
+            
             return True
+            
         except Exception as e:
-            logger.error(f"第 {retry+1}/5 次尝试失败")
-            print(e)
-            import traceback
-            logger.error(traceback.format_exc())
-            await asyncio.sleep(10)
-
-    raise Exception(f'上传视频 {folder} 失败，已重试5次。')
+            logger.error(f"Upload error (attempt {retry + 1}/{max_retries}): {e}")
+            if retry < max_retries - 1:
+                time.sleep(10)
+    
+    raise Exception(f'上传失败，已重试 {max_retries} 次')
 
 
-def upload_all_videos_under_folder(folder):
+def upload_all_videos_under_folder(folder: str) -> str:
+    """上传指定文件夹下的所有视频
+    
+    Args:
+        folder: 根文件夹路径
+        
+    Returns:
+        处理结果描述
     """
-    同步函数，用于启动异步上传任务。
-    """
-    for dir_path, _, files in os.walk(folder):
+    logger.info(f'Starting upload for all videos under: {folder}')
+    uploaded_count = 0
+    failed_count = 0
+    
+    for root, _, files in os.walk(folder):
         if 'video.mp4' in files:
-            logger.info(f"===== 开始处理文件夹: {dir_path} =====")
             try:
-                # 使用 asyncio.run 来执行异步函数 (nest_asyncio 会处理冲突)
-                asyncio.run(upload_video_async(dir_path))
+                upload_video(root)
+                uploaded_count += 1
             except Exception as e:
-                logger.error(f"处理文件夹 {dir_path} 时发生致命错误: {e}")
-    return '所有视频处理完毕。'
+                logger.error(f'Failed to upload video in {root}: {e}')
+                failed_count += 1
+    
+    result_msg = f'Upload complete. Success: {uploaded_count}, Failed: {failed_count}'
+    logger.info(result_msg)
+    return result_msg
 
 
 if __name__ == '__main__':
-    folder = r'videos\The Game Theorists\20210522 Game Theory What Level is Ashs Pikachu Pokemon'
-    upload_all_videos_under_folder(folder)
+    # 示例用法
+    test_folder = r'videos\The Game Theorists\20210522 Game Theory What Level is Ashs Pikachu Pokemon'
+    upload_all_videos_under_folder(test_folder)
