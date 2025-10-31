@@ -19,6 +19,7 @@ from loguru import logger
 from .cn_tx import TextNorm
 from .step041_tts_bytedance import tts as bytedance_tts
 from .step042_tts_xtts import tts as xtts_tts
+from .step043_tts_aliyun import tts as aliyun_tts
 from .utils import save_wav, save_wav_norm
 
 # 初始化文本规范化器
@@ -89,12 +90,19 @@ def adjust_audio_length(
     return wav[:target_samples], actual_length
 
 
-def generate_wavs(folder: str, force_bytedance: bool = False) -> None:
+def generate_wavs(folder: str, tts_model: str = 'xtts_v2', xtts_model_name: str = 'tts_models/multilingual/multi-dataset/xtts_v2', aliyun_voice: str = None) -> None:
     """生成所有片段的语音
     
-    Args:
+        Args:
         folder: 工作文件夹路径
-        force_bytedance: 是否强制使用字节跳动 TTS
+        tts_model: TTS 模型选择，可选值：
+            - 'bytedance': 字节跳动 TTS
+            - 'aliyun': 阿里云 TTS
+            - 'xtts_v1': XTTS v1
+            - 'xtts_v2': XTTS v2 (默认)
+            - 'xtts_v2.0.2': XTTS v2.0.2
+        xtts_model_name: XTTS 模型路径（仅当 tts_model 为 xtts_* 时有效）
+        aliyun_voice: 阿里云 TTS 音色名称（仅当 tts_model 为 aliyun 时有效）
     """
     transcript_path = os.path.join(folder, 'translation.json')
     output_folder = os.path.join(folder, 'wavs')
@@ -117,13 +125,26 @@ def generate_wavs(folder: str, force_bytedance: bool = False) -> None:
 
         print(output_path)
         print(speaker_wav)
-        if num_speakers == 1:
-            # bytedance_tts(text, output_path, speaker_wav, voice_type='BV701_streaming')
-            xtts_tts(text, output_path, speaker_wav)
-        elif force_bytedance:
+        
+        # 根据选择的 TTS 模型调用对应的 TTS 函数
+        if tts_model == 'bytedance':
             bytedance_tts(text, output_path, speaker_wav)
+        elif tts_model == 'aliyun':
+            # 使用 aliyun_voice 参数（如果提供）
+            aliyun_tts(text, output_path, speaker_wav, voice=aliyun_voice)
+        elif tts_model.startswith('xtts_'):
+            # XTTS 模型：xtts_v1, xtts_v2, xtts_v2.0.2
+            if tts_model == 'xtts_v1':
+                model_name = 'tts_models/multilingual/multi-dataset/xtts_v1'
+            elif tts_model == 'xtts_v2.0.2':
+                model_name = 'tts_models/multilingual/multi-dataset/xtts_v2.0.2'
+            else:  # xtts_v2 (默认)
+                model_name = xtts_model_name
+            xtts_tts(text, output_path, speaker_wav, model_name=model_name)
         else:
-            xtts_tts(text, output_path, speaker_wav)
+            # 默认使用 XTTS v2
+            logger.warning(f'未知的 TTS 模型: {tts_model}，使用默认 XTTS v2')
+            xtts_tts(text, output_path, speaker_wav, model_name=xtts_model_name)
 
         start = line['start']
         end = line['end']
@@ -166,32 +187,41 @@ def generate_wavs(folder: str, force_bytedance: bool = False) -> None:
     logger.info(f'Generated {os.path.join(folder, "audio_combined.wav")}')
 
 
-def generate_all_wavs_under_folder(root_folder: str, force_bytedance: bool = False) -> str:
+def generate_all_wavs_under_folder(
+    root_folder: str, 
+    tts_model: str = 'xtts_v2',
+    xtts_model_name: str = 'tts_models/multilingual/multi-dataset/xtts_v2',
+    aliyun_voice: str = None
+) -> str:
     """为指定文件夹下的所有翻译生成语音
     
     Args:
         root_folder: 根文件夹路径
-        force_bytedance: 是否强制使用字节跳动 TTS
+        tts_model: TTS 模型选择
+        xtts_model_name: XTTS 模型路径（仅当 tts_model 为 xtts_* 时有效）
+        aliyun_voice: 阿里云 TTS 音色名称（仅当 tts_model 为 aliyun 时有效）
         
     Returns:
         处理结果描述
     """
-    logger.info(f'Starting TTS generation for all translations under: {root_folder}')
+    logger.info(f'Starting TTS generation for all translations under: {root_folder} (model: {tts_model}, voice: {aliyun_voice})')
     generated_count = 0
     
     for root, dirs, files in os.walk(root_folder):
         if 'translation.json' in files and 'audio_combined.wav' not in files:
             try:
-                generate_wavs(root, force_bytedance)
+                generate_wavs(root, tts_model=tts_model, xtts_model_name=xtts_model_name, aliyun_voice=aliyun_voice)
                 generated_count += 1
             except Exception as e:
                 logger.error(f'Failed to generate wavs in {root}: {e}')
     
-    result_msg = f'Generated wavs for {generated_count} videos under {root_folder}'
+    result_msg = f'Generated wavs for {generated_count} videos under {root_folder} (using {tts_model})'
+    if aliyun_voice:
+        result_msg += f' with voice {aliyun_voice}'
     logger.info(result_msg)
     return result_msg
 
 
 if __name__ == '__main__':
     test_folder = r'videos\TED-Ed\20211214 Would you raise the bird that murdered your children？ - Steve Rothstein'
-    generate_wavs(test_folder, force_bytedance=False)
+    generate_wavs(test_folder, tts_model='xtts_v2')

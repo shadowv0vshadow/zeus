@@ -49,13 +49,15 @@ def process_video(
     whisper_max_speakers: Optional[int],
     translation_target_language: str,
     translation_model_provider: str,
-    force_bytedance: bool,
-    subtitles: bool,
-    speed_up: float,
-    fps: int,
-    target_resolution: str,
-    max_retries: int,
-    auto_upload_video: bool
+    tts_model: str,
+    xtts_model_name: str,
+    aliyun_voice: Optional[str] = None,
+    subtitles: bool = True,
+    speed_up: float = 1.05,
+    fps: int = 30,
+    target_resolution: str = '1080p',
+    max_retries: int = 5,
+    auto_upload_video: bool = True
 ) -> bool:
     """处理单个视频的完整流程
     
@@ -73,7 +75,8 @@ def process_video(
         whisper_min_speakers: 最小说话人数量
         whisper_max_speakers: 最大说话人数量
         translation_target_language: 目标翻译语言
-        force_bytedance: 是否强制使用字节跳动 TTS
+        tts_model: TTS 模型选择
+        xtts_model_name: XTTS 模型路径
         subtitles: 是否添加字幕
         speed_up: 视频加速倍率
         fps: 目标帧率
@@ -140,7 +143,9 @@ def process_video(
             # 4. 语音合成
             generate_all_wavs_under_folder(
                 folder,
-                force_bytedance=force_bytedance
+                tts_model=tts_model,
+                xtts_model_name=xtts_model_name,
+                aliyun_voice=aliyun_voice
             )
             
             # 5. 视频合成
@@ -186,7 +191,9 @@ def do_everything(
     whisper_max_speakers: Optional[int] = None,
     translation_target_language: str = '简体中文',
     translation_model_provider: str = 'openai',
-    force_bytedance: bool = False,
+    tts_model: str = 'xtts_v2',
+    xtts_model_name: str = 'tts_models/multilingual/multi-dataset/xtts_v2',
+    aliyun_voice: Optional[str] = None,
     subtitles: bool = True,
     speed_up: float = 1.05,
     fps: int = 30,
@@ -212,7 +219,8 @@ def do_everything(
         whisper_min_speakers: 最小说话人数量
         whisper_max_speakers: 最大说话人数量
         translation_target_language: 目标翻译语言
-        force_bytedance: 是否强制使用字节跳动 TTS
+        tts_model: TTS 模型选择
+        xtts_model_name: XTTS 模型路径
         subtitles: 是否添加字幕
         speed_up: 视频加速倍率
         fps: 目标帧率
@@ -257,7 +265,9 @@ def do_everything(
             whisper_max_speakers,
             translation_target_language,
             translation_model_provider,
-            force_bytedance,
+            tts_model,
+            xtts_model_name,
+            aliyun_voice,
             subtitles,
             speed_up,
             fps,

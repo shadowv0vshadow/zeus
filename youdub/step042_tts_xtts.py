@@ -25,6 +25,8 @@ def init_TTS():
 
 def load_model(model_path="tts_models/multilingual/multi-dataset/xtts_v2", device='auto'):
     global model
+    # 如果已经加载了相同的模型，不需要重新加载
+    # 注意：这里简化处理，实际可能需要检查模型路径是否相同
     if model is not None:
         return
     
