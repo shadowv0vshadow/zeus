@@ -48,6 +48,7 @@ def process_video(
     whisper_min_speakers: Optional[int],
     whisper_max_speakers: Optional[int],
     translation_target_language: str,
+    translation_model_provider: str,
     force_bytedance: bool,
     subtitles: bool,
     speed_up: float,
@@ -132,7 +133,8 @@ def process_video(
             # 3. 翻译
             translate_all_transcript_under_folder(
                 folder,
-                target_language=translation_target_language
+                target_language=translation_target_language,
+                model_provider=translation_model_provider
             )
             
             # 4. 语音合成
@@ -183,6 +185,7 @@ def do_everything(
     whisper_min_speakers: Optional[int] = None,
     whisper_max_speakers: Optional[int] = None,
     translation_target_language: str = '简体中文',
+    translation_model_provider: str = 'openai',
     force_bytedance: bool = False,
     subtitles: bool = True,
     speed_up: float = 1.05,
@@ -253,6 +256,7 @@ def do_everything(
             whisper_min_speakers,
             whisper_max_speakers,
             translation_target_language,
+            translation_model_provider,
             force_bytedance,
             subtitles,
             speed_up,

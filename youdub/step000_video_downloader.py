@@ -145,30 +145,40 @@ def get_info_list_from_url(
     if isinstance(url, str):
         url = [url]
 
-    # 准备选项
-    ydl_opts = {
-        'format': 'best',
-        'dumpjson': True,
-        'playlistend': num_videos,
-        'ignoreerrors': True
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        for u in url:
-            try:
+    for u in url:
+        try:
+            # 检测URL类型：如果包含 watch?v=，视为单个视频；否则视为播放列表
+            is_single_video = 'watch?v=' in u or '/watch/' in u
+            
+            # 准备选项
+            ydl_opts = {
+                'format': 'best',
+                'dumpjson': True,
+                'ignoreerrors': True
+            }
+            
+            if is_single_video:
+                # 单个视频：即使URL包含播放列表参数，也只下载该视频
+                ydl_opts['noplaylist'] = True
+            else:
+                # 播放列表：限制下载数量
+                ydl_opts['playlistend'] = num_videos
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 result = ydl.extract_info(u, download=False)
-                
-                if 'entries' in result:
-                    # 播放列表
-                    for video_info in result['entries']:
-                        if video_info:  # 过滤掉 None 值
-                            yield video_info
-                else:
-                    # 单个视频
+            
+            if 'entries' in result:
+                # 播放列表
+                for video_info in result['entries']:
+                    if video_info:  # 过滤掉 None 值
+                        yield video_info
+            else:
+                # 单个视频
+                if result:  # 确保不是 None
                     yield result
                     
-            except Exception as e:
-                logger.error(f'Failed to extract info from {u}: {e}')
+        except Exception as e:
+            logger.error(f'Failed to extract info from {u}: {e}')
 
 
 def download_from_url(
@@ -190,29 +200,41 @@ def download_from_url(
 
     logger.info(f'Fetching video information from {len(url)} URL(s)')
     
-    # 获取视频信息
-    ydl_opts = {
-        'format': 'best',
-        'dumpjson': True,
-        'playlistend': num_videos,
-        'ignoreerrors': True
-    }
-
     video_info_list = []
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        for u in url:
-            try:
+    for u in url:
+        try:
+            # 检测URL类型：如果包含 watch?v=，视为单个视频；否则视为播放列表
+            is_single_video = 'watch?v=' in u or '/watch/' in u
+            
+            # 准备选项
+            ydl_opts = {
+                'format': 'best',
+                'dumpjson': True,
+                'ignoreerrors': True
+            }
+            
+            if is_single_video:
+                # 单个视频：即使URL包含播放列表参数，也只下载该视频
+                ydl_opts['noplaylist'] = True
+                logger.info(f'Detected single video URL, downloading only this video: {u}')
+            else:
+                # 播放列表：限制下载数量
+                ydl_opts['playlistend'] = num_videos
+                logger.info(f'Detected playlist URL, downloading up to {num_videos} videos')
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 result = ydl.extract_info(u, download=False)
-                
-                if 'entries' in result:
-                    # 播放列表
-                    video_info_list.extend([v for v in result['entries'] if v])
-                else:
-                    # 单个视频
+            
+            if 'entries' in result:
+                # 播放列表
+                video_info_list.extend([v for v in result['entries'] if v])
+            else:
+                # 单个视频
+                if result:  # 确保不是 None
                     video_info_list.append(result)
                     
-            except Exception as e:
-                logger.error(f'Failed to extract info from {u}: {e}')
+        except Exception as e:
+            logger.error(f'Failed to extract info from {u}: {e}')
 
     # 下载视频
     logger.info(f'Downloading {len(video_info_list)} video(s)')

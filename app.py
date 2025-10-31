@@ -32,6 +32,8 @@ do_everything_interface = gr.Interface(
                  label='Whisper Max Speakers', value=None),
         gr.Dropdown(['简体中文', '繁体中文', 'English', 'Deutsch', 'Français', 'русский'],
                     label='Translation Target Language', value='简体中文'),
+        gr.Radio(['openai', 'aliyun'], label='Translation Model Provider', value='openai',
+                 info='选择翻译模型提供商：OpenAI 或 阿里云通义大模型'),
         gr.Checkbox(label='Force Bytedance', value=True),
         gr.Checkbox(label='Subtitles', value=True),
         gr.Slider(minimum=0.5, maximum=2, step=0.05, label='Speed Up', value=1.05),
@@ -96,6 +98,8 @@ translation_interface = gr.Interface(
         gr.Textbox(label='Folder', value='videos'),  # Changed 'default' to 'value'
         gr.Dropdown(['简体中文', '繁体中文', 'English', 'Deutsch', 'Français', 'русский'],
                     label='Target Language', value='简体中文'),
+        gr.Radio(['openai', 'aliyun'], label='Model Provider', value='openai',
+                 info='选择AI模型提供商：OpenAI 或 阿里云通义大模型'),
     ],
     outputs='text',
 )

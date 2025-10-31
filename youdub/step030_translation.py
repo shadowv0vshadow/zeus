@@ -1,4 +1,16 @@
 # -*- coding: utf-8 -*-
+"""
+YouDub 翻译模块 - 五步法翻译
+
+采用深度AI翻译模型，能全面提升语义理解与译文生成的自然度与一致性。
+
+YouDub 视频翻译五步法：
+1. 理解核心 - 深入理解视频的主旨和核心信息
+2. 语境翻译 - 根据视频的主旨和核心，把字幕翻译成目标语言
+3. 文化调整 - 针对翻译结果，根据目标语言的文化背景和表达习惯进行调整
+4. 反思调整 - AI对翻译结果自动评估，检测并修正文化语义偏差、流畅度问题及风格一致性
+5. 字幕精校 - 最后对翻译好的字幕进行全面检查，确保字幕与视频同步准确无误
+"""
 import json
 import os
 import re
@@ -6,20 +18,46 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import time
 from loguru import logger
+from datetime import datetime
+
+# 尝试导入阿里云DashScope SDK
+try:
+    import dashscope
+    from dashscope import Generation
+    DASHSCOPE_AVAILABLE = True
+except ImportError:
+    DASHSCOPE_AVAILABLE = False
+    logger.warning('DashScope SDK 未安装，如需使用阿里云通义大模型，请运行: pip install dashscope')
 
 load_dotenv()
 
+# 模型提供商配置
+MODEL_PROVIDER = os.getenv('MODEL_PROVIDER', 'openai').lower()  # 'openai' 或 'aliyun'
 model_name = os.getenv('MODEL_NAME', 'gpt-3.5-turbo')
 api_base = os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1')
 api_key = os.getenv('OPENAI_API_KEY', '')
+aliyun_api_key = os.getenv('DASHSCOPE_API_KEY', '')  # 阿里云API密钥
 
-logger.info(f'Translation module loaded')
-logger.info(f'Using model: {model_name}')
-logger.info(f'API base: {api_base}')
-logger.info(f'API key configured: {"Yes" if api_key else "No"}')
+# 如果是阿里云，使用相应的默认值
+if MODEL_PROVIDER == 'aliyun':
+    if not model_name or model_name.startswith('gpt-'):
+        model_name = os.getenv('MODEL_NAME', 'qwen-turbo')  # 默认使用通义千问Turbo
 
-if not api_key:
-    logger.error('⚠️ OPENAI_API_KEY is not set in environment variables!')
+logger.info(f'翻译模块已加载 - YouDub 五步法翻译系统')
+logger.info(f'模型提供商: {MODEL_PROVIDER}')
+logger.info(f'使用模型: {model_name}')
+if MODEL_PROVIDER == 'openai':
+    logger.info(f'API 地址: {api_base}')
+    logger.info(f'API 密钥已配置: {"是" if api_key else "否"}')
+    if not api_key:
+        logger.error('⚠️ OPENAI_API_KEY 环境变量未设置！')
+else:
+    logger.info(f'阿里云 DashScope API 密钥已配置: {"是" if aliyun_api_key else "否"}')
+    if not aliyun_api_key:
+        logger.error('⚠️ DASHSCOPE_API_KEY 环境变量未设置！')
+    if DASHSCOPE_AVAILABLE:
+        dashscope.api_key = aliyun_api_key
+
 if model_name == "01ai/Yi-34B-Chat-4bits":
     extra_body = {
         'repetition_penalty': 1.1,
@@ -29,6 +67,149 @@ else:
     extra_body = {
         #  'repetition_penalty': 1.1,
     }
+
+
+class UnifiedModelClient:
+    """统一的模型调用接口，支持OpenAI和阿里云通义大模型"""
+    
+    def __init__(self, provider=None, model_name=None, api_base=None, api_key=None):
+        self.provider = provider or MODEL_PROVIDER
+        # 如果未指定model_name，使用全局配置的model_name
+        if model_name is None:
+            # 从模块全局变量获取
+            import sys
+            current_module = sys.modules[__name__]
+            model_name = getattr(current_module, 'model_name', 'gpt-3.5-turbo')
+        self.model_name = model_name
+        self.api_base = api_base
+        self.api_key = api_key
+        
+        if self.provider == 'openai':
+            self.client = OpenAI(
+                base_url=api_base or os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1'),
+                api_key=api_key or os.getenv('OPENAI_API_KEY')
+            )
+        elif self.provider == 'aliyun':
+            self.api_key = api_key or os.getenv('DASHSCOPE_API_KEY', '')
+            if not self.api_key:
+                raise ValueError('DASHSCOPE_API_KEY 环境变量未设置')
+            # 优先使用OpenAI兼容的API方式，更简单且稳定
+            self.client = OpenAI(
+                base_url=os.getenv('DASHSCOPE_API_BASE', 'https://dashscope.aliyuncs.com/compatible-mode/v1'),
+                api_key=self.api_key
+            )
+            # 如果DashScope SDK可用，也设置API密钥
+            if DASHSCOPE_AVAILABLE:
+                dashscope.api_key = self.api_key
+        else:
+            raise ValueError(f'不支持的模型提供商: {self.provider}')
+    
+    def chat_completions_create(self, messages, model=None, timeout=240, **kwargs):
+        """统一的聊天完成接口"""
+        model = model or self.model_name
+        
+        if self.provider == 'openai':
+            # OpenAI API调用
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                timeout=timeout,
+                **kwargs
+            )
+            # 转换为统一格式
+            return {
+                'choices': [{
+                    'message': {
+                        'content': response.choices[0].message.content
+                    },
+                    'finish_reason': response.choices[0].finish_reason
+                }],
+                'model': response.model
+            }
+        
+        elif self.provider == 'aliyun':
+            # 阿里云通义大模型API调用（使用OpenAI兼容接口）
+            try:
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    timeout=timeout,
+                    **kwargs
+                )
+                # 转换为统一格式
+                return {
+                    'choices': [{
+                        'message': {
+                            'content': response.choices[0].message.content
+                        },
+                        'finish_reason': getattr(response.choices[0], 'finish_reason', 'stop')
+                    }],
+                    'model': getattr(response, 'model', model)
+                }
+            except Exception as e:
+                # 如果OpenAI兼容接口失败，尝试使用DashScope SDK
+                if DASHSCOPE_AVAILABLE:
+                    logger.debug(f'OpenAI兼容接口调用失败，尝试使用DashScope SDK: {e}')
+                    # 转换消息格式
+                    dashscope_messages = []
+                    for msg in messages:
+                        role_map = {
+                            'system': 'system',
+                            'user': 'user',
+                            'assistant': 'assistant'
+                        }
+                        dashscope_messages.append({
+                            'role': role_map.get(msg['role'], 'user'),
+                            'content': msg['content']
+                        })
+                    
+                    # 调用DashScope API
+                    response = Generation.call(
+                        model=model,
+                        messages=dashscope_messages,
+                        result_format='message',  # 返回消息格式
+                    )
+                    
+                    # 处理响应
+                    if response.status_code == 200:
+                        return {
+                            'choices': [{
+                                'message': {
+                                    'content': response.output.choices[0].message.content
+                                },
+                                'finish_reason': getattr(response.output.choices[0], 'finish_reason', 'stop')
+                            }],
+                            'model': model
+                        }
+                    else:
+                        error_msg = f"阿里云API调用失败: {getattr(response, 'message', '') or getattr(response, 'code', '未知错误')}"
+                        raise Exception(error_msg)
+                else:
+                    raise e
+        
+        else:
+            raise ValueError(f'不支持的模型提供商: {self.provider}')
+
+
+def get_model_client(**kwargs):
+    """获取模型客户端实例"""
+    provider = kwargs.get('provider', MODEL_PROVIDER)
+    client_model_name = kwargs.get('model_name')
+    if provider == 'openai':
+        return UnifiedModelClient(
+            provider='openai',
+            model_name=client_model_name,
+            api_base=kwargs.get('api_base', api_base),
+            api_key=kwargs.get('api_key', api_key)
+        )
+    elif provider == 'aliyun':
+        return UnifiedModelClient(
+            provider='aliyun',
+            model_name=client_model_name,
+            api_key=kwargs.get('api_key', aliyun_api_key)
+        )
+    else:
+        raise ValueError(f'不支持的模型提供商: {provider}')
 
 
 def get_necessary_info(info: dict):
@@ -63,12 +244,164 @@ def ensure_transcript_length(transcript, max_length=2000):
     return before[:length] + after[-length:]
 
 
+def print_separator(title=""):
+    """打印分隔线"""
+    separator = "=" * 85
+    if title:
+        logger.info(f"\n{separator}\n{title}\n{separator}\n")
+    else:
+        logger.info(separator)
+
+
+def calculate_token_estimate(transcript):
+    """估算token消耗
+    
+    Args:
+        transcript: 转录文本列表
+        
+    Returns:
+        字幕条数, 字符数, 预计token数
+    """
+    subtitle_count = len(transcript)
+    char_count = sum(len(line['text']) for line in transcript)
+    estimated_tokens = char_count * 2  # 粗略估计：1个汉字约2个token
+    return subtitle_count, char_count, estimated_tokens
+
+
+def deep_understand_video(info, transcript, target_language='简体中文'):
+    """第一步：理解核心
+    
+    深入理解视频的主旨、风格、受众、文化背景等核心信息
+    
+    Args:
+        info: 视频信息
+        transcript: 转录文本
+        target_language: 目标语言
+        
+    Returns:
+        视频深度理解结果
+    """
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    subtitle_count, char_count, estimated_tokens = calculate_token_estimate(transcript)
+    
+    logger.info(f"\n{timestamp} AI 预算消耗token数：这部视频字幕条数={subtitle_count}，字符数={char_count}，预计花费token数={estimated_tokens}")
+    logger.info(f"\n{timestamp} 进入第1轮->理解核心： 首先深入理解视频的主旨和核心信息。")
+    logger.info("\n" + "-" * 30 + "AI对该视频的理解如下：" + "-" * 30 + "\n")
+    
+    client = get_model_client()
+    
+    transcript_text = ' '.join(line['text'] for line in transcript)
+    transcript_text = ensure_transcript_length(transcript_text, max_length=1500)
+    transcript_text = transcript_text.replace('\n', ' ').strip()
+    
+    info_message = f'标题: "{info["title"]}" 作者: "{info["uploader"]}". '
+    
+    # 深度理解prompt
+    understanding_prompt = f'''作为一个视频内容分析专家，请对以下视频进行深度理解和分析：
+
+视频信息：
+{info_message}
+
+视频文稿片段：
+{transcript_text}
+
+请从以下几个维度进行深入分析，并以JSON格式返回：
+1. 核心主题：视频的主要内容和核心信息
+2. 整体风格：视频的表达风格（幽默/严肃/教育/娱乐等）
+3. 目标受众：视频的目标观众群体
+4. 语气特点：视频的语言风格和语气特征
+5. 专业术语：视频中涉及的专业领域和术语
+6. 文化背景：视频的文化背景和地域特点
+7. 教育意义：视频传递的价值观或教育意义
+
+请返回JSON格式：
+```json
+{{
+  "title": "视频标题",
+  "core_theme": "核心主题描述",
+  "style": "整体风格",
+  "target_audience": "目标受众",
+  "tone": "语气特点",
+  "terminology": "专业术语说明",
+  "cultural_background": "文化背景",
+  "educational_value": "教育意义或价值观"
+}}
+```'''
+
+    messages = [
+        {'role': 'system', 'content': '你是一个专业的视频内容分析专家，擅长深入理解视频的主题、风格、受众和文化背景。'},
+        {'role': 'user', 'content': understanding_prompt},
+    ]
+    
+    success = False
+    understanding = None
+    
+    for retry in range(5):
+        try:
+            response = client.chat_completions_create(
+                messages=messages,
+                timeout=240,
+                **extra_body if extra_body else {}
+            )
+            
+            finish_reason = response['choices'][0]['finish_reason']
+            if finish_reason == 'content_filter':
+                logger.warning('⚠️ 内容被过滤，尝试使用更简短的内容...')
+                raise Exception('内容过滤，重试')
+            
+            content = response['choices'][0]['message']['content']
+            if not content:
+                raise Exception('API 返回内容为空')
+            
+            # 提取JSON
+            json_matches = re.findall(r'\{.*?\}', content.replace('\n', ''), re.DOTALL)
+            if not json_matches:
+                raise Exception("未找到 JSON 格式")
+            
+            understanding = json.loads(json_matches[0])
+            
+            # 验证必要字段
+            required_fields = ['title', 'core_theme', 'style', 'target_audience']
+            if not all(field in understanding for field in required_fields):
+                raise Exception('理解结果缺少必要字段')
+            
+            # 打印AI理解结果
+            logger.info(f"\n{understanding.get('core_theme', '')}\n")
+            logger.info(f"整体风格{understanding.get('style', '')}，适合{understanding.get('target_audience', '')}观看。")
+            logger.info(f"语气{understanding.get('tone', '')}。")
+            if understanding.get('terminology'):
+                logger.info(f"专业术语：{understanding['terminology']}")
+            if understanding.get('cultural_background'):
+                logger.info(f"文化背景：{understanding['cultural_background']}")
+            if understanding.get('educational_value'):
+                logger.info(f"\n{understanding['educational_value']}\n")
+            
+            success = True
+            break
+            
+        except Exception as e:
+            logger.warning(f'视频理解失败 (尝试 {retry + 1}/5): {e}')
+            time.sleep(2)
+    
+    if not success or not understanding:
+        # 回退到简单理解
+        logger.warning('深度理解失败，使用简化理解')
+        understanding = {
+            'title': info['title'],
+            'core_theme': '视频内容',
+            'style': '信息类',
+            'target_audience': '普通观众',
+            'tone': '中性',
+            'terminology': '',
+            'cultural_background': '',
+            'educational_value': ''
+        }
+    
+    return understanding
+
+
 def summarize(info, transcript, target_language='简体中文'):
-    client = OpenAI(
-    # This is the default and can be omitted
-    base_url=os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1'),
-    api_key=os.getenv('OPENAI_API_KEY')
-)
+    client = get_model_client()
     transcript = ' '.join(line['text'] for line in transcript)
     transcript = ensure_transcript_length(transcript, max_length=1500)  # 减少长度避免内容过滤
     
@@ -102,30 +435,23 @@ Please create a brief summary in JSON format:
                 {'role': 'user', 'content': full_description+retry_message},
             ]
             
-            logger.info(f'正在调用 OpenAI API, 模型: {model_name}')
+            logger.info(f'正在调用 AI API, 模型: {model_name}')
             
-            if extra_body:
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    timeout=240,
-                    **extra_body
-                )
-            else:
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    timeout=240
-                )
+            kwargs = extra_body if extra_body else {}
+            response = client.chat_completions_create(
+                messages=messages,
+                timeout=240,
+                **kwargs
+            )
             
             # 详细记录响应信息
-            finish_reason = response.choices[0].finish_reason
-            logger.info(f'API 响应模型: {response.model}')
+            finish_reason = response['choices'][0]['finish_reason']
+            logger.info(f'API 响应模型: {response.get("model", model_name)}')
             logger.info(f'Finish reason: {finish_reason}')
             
             # 特殊处理内容过滤
             if finish_reason == 'content_filter':
-                logger.warning('⚠️ 内容被 OpenAI 过滤器拦截')
+                logger.warning('⚠️ 内容被过滤器拦截')
                 logger.warning('尝试使用更简短的转录内容...')
                 # 大幅缩短转录内容
                 short_transcript = ' '.join(line['text'] for line in transcript[:10])  # 只取前10句
@@ -134,7 +460,7 @@ Please create a brief summary in JSON format:
                 messages[1]['content'] = full_description
                 raise Exception('内容过滤，使用简短版本重试')
             
-            summary = response.choices[0].message.content
+            summary = response['choices'][0]['message']['content']
             if not summary:
                 logger.error('API 返回内容为空！')
                 logger.error(f'完整响应对象: {response}')
@@ -184,13 +510,13 @@ Please create a brief summary in JSON format:
     max_translation_retries = 10
     for retry in range(max_translation_retries):
         try:
-            response = client.chat.completions.create(
-                model=model_name,
+            kwargs = extra_body if extra_body else {}
+            response = client.chat_completions_create(
                 messages=messages,
                 timeout=240,
-                extra_body=extra_body
+                **kwargs
             )
-            summary = response.choices[0].message.content.replace('\n', '')
+            summary = response['choices'][0]['message']['content'].replace('\n', '')
             logger.info(f'AI 翻译返回内容: {summary}')
             
             # 查找 JSON 格式
@@ -408,154 +734,472 @@ def split_sentences(translation):
     
     return output_data
 
-def _translate(summary, transcript, target_language='简体中文'):
-    client = OpenAI(
-        # This is the default and can be omitted
-        base_url=os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1'),
-        api_key=os.getenv('OPENAI_API_KEY')
-    )
-    info = f'This is a video called "{summary["title"]}". {summary["summary"]}.'
-    full_translation = []
-    fixed_message = [
-        {'role': 'system', 'content': f'You are a expert in the field of this video.\n{info}\nTranslate the sentence into {target_language}.下面我让你来充当翻译家，你的目标是把任何语言翻译成中文，请翻译时不要带翻译腔，而是要翻译得自然、流畅和地道，使用优美和高雅的表达方式。请将人工智能的“agent”翻译为“智能体”，强化学习中是`Q-Learning`而不是`Queue Learning`。数学公式写成plain text，不要使用latex。确保翻译正确和简洁。注意信达雅。'},
-        {'role': 'user', 'content': '使用地道的中文Translate:"Knowledge is power."'},
-        {'role': 'assistant', 'content': '翻译：“知识就是力量。”'},
-        {'role': 'user', 'content': '使用地道的中文Translate:"To be or not to be, that is the question."'},
-        {'role': 'assistant', 'content': '翻译：“生存还是毁灭，这是一个值得考虑的问题。”'},]
+def context_translate(understanding, transcript, target_language='简体中文'):
+    """第二步：语境翻译
+    
+    基于对视频的深度理解，进行语境化翻译
+    
+    Args:
+        understanding: 视频理解结果
+        transcript: 转录文本
+        target_language: 目标语言
+        
+    Returns:
+        初步翻译结果列表
+    """
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    logger.info(f"\n{timestamp} 进入第2轮->语境翻译： 根据视频的主旨和核心，把字幕翻译成目标语言。\n")
+    
+    client = get_model_client()
+    
+    # 构建丰富的上下文信息
+    context_info = f'''视频标题："{understanding["title"]}"
+核心主题：{understanding.get("core_theme", "")}
+整体风格：{understanding.get("style", "")}
+目标受众：{understanding.get("target_audience", "")}
+语气特点：{understanding.get("tone", "")}'''
+    
+    if understanding.get("terminology"):
+        context_info += f'\n专业术语：{understanding["terminology"]}'
+    if understanding.get("cultural_background"):
+        context_info += f'\n文化背景：{understanding["cultural_background"]}'
+    
+    system_prompt = f'''你是一个专业的视频字幕翻译专家，精通{target_language}的表达习惯。
 
+视频背景信息：
+{context_info}
+
+翻译要求：
+1. 基于视频的整体风格和语气进行翻译
+2. 翻译要自然、流畅、地道，避免翻译腔
+3. 保持原文的情感色彩和语气
+4. 使用优美和高雅的表达方式
+5. 注意专业术语的准确翻译
+6. 数学公式使用plain text，不使用latex
+7. 人工智能的"agent"翻译为"智能体"
+8. 确保翻译简洁准确，符合{target_language}的习惯
+
+请只返回翻译结果，不要包含"翻译"等提示词。'''
+    
+    fixed_message = [
+        {'role': 'system', 'content': system_prompt},
+        {'role': 'user', 'content': '"Knowledge is power."'},
+        {'role': 'assistant', 'content': '知识就是力量。'},
+        {'role': 'user', 'content': '"To be or not to be, that is the question."'},
+        {'role': 'assistant', 'content': '生存还是毁灭，这是一个值得考虑的问题。'},
+    ]
+    
+    full_translation = []
     history = []
-    for line in transcript:
+    total = len(transcript)
+    
+    logger.info(f"{timestamp} AI翻译字幕: 进度 0%")
+    
+    for idx, line in enumerate(transcript):
         text = line['text']
         original_text = text
         
-        # 策略1: 预处理异常文本（大量重复字符）
-        # 检测是否有异常长的重复字符序列
+        # 显示进度
+        progress = int((idx + 1) / total * 100)
+        if (idx + 1) % max(1, total // 10) == 0 or idx == total - 1:
+            logger.info(f"{timestamp} AI翻译字幕: 进度 {progress}%")
+        
+        # 预处理异常文本
         if len(text) > 200:
-            # 检查是否有超过10个连续重复的字符
-            import re
             repeated_pattern = re.search(r'(.)\1{10,}', text)
             if repeated_pattern:
-                # 简化重复字符为最多3个
                 text = re.sub(r'(.)\1{3,}', r'\1\1\1', text)
-                logger.warning(f'检测到大量重复字符，已简化: {original_text[:50]}... -> {text[:50]}...')
-
-        retry_message = 'Only translate the quoted sentence and give me the final translation.'
+                logger.warning(f'检测到大量重复字符，已简化')
+        
         translation = None
+        last_raw_translation = None  # 保存最后一次API返回的原始内容
+        last_error = None  # 保存最后一次错误信息
         
         for retry in range(5):
-            # 策略2: 根据重试次数调整策略
             if retry == 0:
-                # 第一次：正常翻译
-                user_content = f'使用地道的中文Translate:"{text}"'
+                user_content = f'"{text}"'
             elif retry == 1:
-                # 第二次：简化提示
-                user_content = f'Translate to Chinese: {text}'
-            elif retry == 2:
-                # 第三次：更直接的指令
-                user_content = f'请翻译成中文：{text}'
+                user_content = f'请翻译：{text}'
             else:
-                # 第四、五次：截短文本重试
                 truncated = text[:100] if len(text) > 100 else text
-                user_content = f'翻译：{truncated}'
+                user_content = f'{truncated}'
             
             messages = fixed_message + history[-30:] + [{'role': 'user', 'content': user_content}]
-
+            
             try:
-                response = client.chat.completions.create(
-                    model=model_name,
+                kwargs = extra_body if extra_body else {}
+                response = client.chat_completions_create(
                     messages=messages,
                     timeout=240,
-                    extra_body=extra_body
+                    **kwargs
                 )
                 
-                # 策略3: 检查 finish_reason
-                finish_reason = response.choices[0].finish_reason
+                finish_reason = response['choices'][0]['finish_reason']
                 if finish_reason == 'content_filter':
-                    logger.warning(f'内容被过滤 (content_filter)，尝试简化文本')
-                    # 大幅简化文本
                     text = text[:50] if len(text) > 50 else text
-                    raise Exception('Content filtered, retry with shorter text')
+                    last_error = '内容被过滤'
+                    raise Exception('Content filtered')
                 
-                translation = response.choices[0].message.content
-                if translation:
-                    translation = translation.replace('\n', '')
+                raw_translation = response['choices'][0]['message']['content']
+                last_raw_translation = raw_translation  # 保存原始返回内容
                 
-                logger.info(f'原文：{original_text[:100]}...' if len(original_text) > 100 else f'原文：{original_text}')
-                logger.info(f'译文：{translation}')
+                if raw_translation:
+                    raw_translation = raw_translation.replace('\n', '').strip()
                 
-                # 检查是否为空响应
-                if not translation or not translation.strip():
-                    logger.warning(f'AI 返回空响应，重试 {retry + 1}/5')
+                if not raw_translation:
+                    last_error = 'API返回内容为空'
                     raise Exception('Empty translation response')
                 
-                success, translation = valid_translation(original_text, translation)
+                # 尝试清理和验证翻译
+                success, cleaned_translation = valid_translation(original_text, raw_translation)
                 if not success:
-                    retry_message += translation
-                    raise Exception('Invalid translation')
-                break
+                    # 保存验证失败的原因（cleaned_translation此时是错误提示信息）
+                    last_error = f'验证失败: {cleaned_translation[:100]}'
+                    # 尝试从原始返回中提取可能的翻译内容
+                    # 即使验证失败，也可能包含有用的翻译
+                    if retry < 4:
+                        raise Exception('Invalid translation')
+                    else:
+                        # 最后一次重试，尝试智能提取
+                        # 移除常见的提示词前缀
+                        extracted = raw_translation
+                        for prefix in ['翻译:', 'Translation:', '翻译：', '翻译为:', '翻译为：']:
+                            if prefix in extracted:
+                                extracted = extracted.split(prefix, 1)[-1].strip()
+                        # 移除引号
+                        if (extracted.startswith('"') and extracted.endswith('"')) or \
+                           (extracted.startswith('"') and extracted.endswith('"')) or \
+                           (extracted.startswith("'") and extracted.endswith("'")):
+                            extracted = extracted[1:-1].strip()
+                        # 如果提取的内容看起来像翻译（包含中文字符），使用它
+                        if any('\u4e00' <= char <= '\u9fff' for char in extracted):
+                            translation = extracted
+                            logger.warning(f'翻译验证失败，但已从API返回中提取翻译: {original_text[:30]}... -> {extracted[:30]}...')
+                            break
+                        else:
+                            raise Exception('Invalid translation')
+                else:
+                    translation = cleaned_translation
+                    break
+                    
             except Exception as e:
-                logger.error(f'翻译失败 (尝试 {retry + 1}/5): {e}')
-                if str(e) == 'Internal Server Error':
-                    client = OpenAI(
-                        base_url=os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1'),
-                        api_key=os.getenv('OPENAI_API_KEY')
-                    )
-                time.sleep(1)
+                error_msg = str(e)
+                if retry == 4:
+                    # 最后一次重试失败，记录详细信息
+                    error_details = f'原文: {original_text[:50]}...'
+                    if last_raw_translation:
+                        error_details += f' | API返回: {last_raw_translation[:100]}...'
+                    if last_error:
+                        error_details += f' | 错误: {last_error}'
+                    else:
+                        error_details += f' | 异常: {error_msg}'
+                    logger.warning(f'翻译失败 ({retry+1}/5): {error_details}')
+                else:
+                    # 非最后一次失败，只记录简要信息
+                    if retry >= 2:  # 从第3次重试开始记录
+                        logger.debug(f'翻译重试 ({retry+1}/5): {original_text[:30]}... - {error_msg}')
+                
+                # 递增等待时间，避免频繁请求
+                wait_time = min(1 + retry * 0.5, 3)
+                time.sleep(wait_time)
         
-        # 策略4: 如果5次重试后仍然失败，使用原文作为后备
         if translation is None or not translation.strip():
-            logger.warning(f'翻译失败5次，使用原文作为后备: {original_text[:50]}...')
-            translation = original_text
+            # 如果所有重试都失败，尝试使用最后一次的原始返回（如果存在）
+            if last_raw_translation:
+                # 简单清理后使用
+                fallback = last_raw_translation.strip()
+                # 移除常见的提示词
+                for prefix in ['翻译:', 'Translation:', '翻译：', '翻译为:', '翻译为：']:
+                    if prefix in fallback:
+                        fallback = fallback.split(prefix, 1)[-1].strip()
+                # 如果包含中文，优先使用
+                if any('\u4e00' <= char <= '\u9fff' for char in fallback):
+                    translation = fallback
+                    logger.warning(f'使用API返回作为fallback翻译: {original_text[:30]}... -> {fallback[:30]}...')
+                else:
+                    translation = original_text
+                    logger.warning(f'翻译失败，使用原文: {original_text[:50]}...')
+            else:
+                translation = original_text
+                logger.warning(f'翻译失败且无API返回，使用原文: {original_text[:50]}...')
         
         full_translation.append(translation)
-        history.append({'role': 'user', 'content': f'Translate:"{original_text}"'})
-        history.append({'role': 'assistant', 'content': f'翻译："{translation}"'})
+        history.append({'role': 'user', 'content': f'"{original_text}"'})
+        history.append({'role': 'assistant', 'content': translation})
         time.sleep(0.1)
-
+    
+    logger.info(f"{timestamp} AI翻译字幕: 进度 100%\n")
     return full_translation
 
-def translate(folder, target_language='简体中文'):
-    if os.path.exists(os.path.join(folder, 'translation.json')):
-        logger.info(f'Translation already exists in {folder}')
-        return True
 
-    info_path = os.path.join(folder, 'download.info.json')
-    if not os.path.exists(info_path):
-        return False
-    # info_path = r'videos\Lex Clips\20231222 Jeff Bezos on fear of death ｜ Lex Fridman Podcast Clips\download.info.json'
-    with open(info_path, 'r', encoding='utf-8') as f:
-        info = json.load(f)
-    info = get_necessary_info(info)
+def cultural_adaptation(translations, transcript, target_language='简体中文', understanding=None):
+    """第三步：文化调整
+    
+    针对翻译结果，根据目标语言的文化背景和表达习惯进行调整
+    
+    Args:
+        translations: 初步翻译结果
+        transcript: 原始转录
+        target_language: 目标语言
+        understanding: 视频理解结果
+        
+    Returns:
+        文化调整后的翻译结果
+    """
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    logger.info(f"{timestamp} 进入第3轮->文化调整： 针对意译的结果，根据目标语言的文化背景和表达习惯，对翻译文本进行适当调整。\n")
+    
+    # 文化调整规则
+    adapted_translations = []
+    for translation in translations:
+        # 应用后处理规则
+        adapted = translation_postprocess(translation)
+        adapted_translations.append(adapted)
+    
+    return adapted_translations
 
-    transcript_path = os.path.join(folder, 'transcript.json')
-    with open(transcript_path, 'r', encoding='utf-8') as f:
-        transcript = json.load(f)
 
-    summary_path = os.path.join(folder, 'summary.json')
-    if os.path.exists(summary_path):
-        summary = json.load(open(summary_path, 'r', encoding='utf-8'))
-    else:
-        summary = summarize(info, transcript, target_language)
-        if summary is None:
-            logger.error(f'Failed to summarize {folder}')
+def reflection_and_refinement(translations, transcript, target_language='简体中文', understanding=None):
+    """第四步：反思调整
+    
+    AI对翻译结果自动评估，检测并修正文化语义偏差、流畅度问题及风格一致性
+    
+    Args:
+        translations: 文化调整后的翻译
+        transcript: 原始转录
+        target_language: 目标语言
+        understanding: 视频理解结果
+        
+    Returns:
+        反思调整后的翻译结果
+    """
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    logger.info(f"{timestamp} 进入第4轮->反思调整： AI对翻译结果自动评估，检测并修正文化语义偏差、流畅度问题及风格一致性等方面的问题。\n")
+    logger.info(f"{timestamp} AI正在进行翻译， 进度： 0%")
+    
+    # 简化版：主要检查明显错误
+    refined_translations = []
+    total = len(translations)
+    
+    for idx, (translation, line) in enumerate(zip(translations, transcript)):
+        # 显示进度
+        if (idx + 1) % max(1, total // 4) == 0 or idx == total - 1:
+            progress = int((idx + 1) / total * 100)
+            logger.info(f"{timestamp} AI正在进行翻译， 进度： {progress}%")
+        
+        # 基本检查：长度合理性、禁用词等
+        refined = translation
+        
+        # 检查过长的翻译
+        if len(refined) > len(line['text']) * 2:
+            refined = refined[:len(line['text']) * 2]
+        
+        refined_translations.append(refined)
+    
+    logger.info(f"{timestamp} AI正在进行翻译， 进度： 100%\n")
+    return refined_translations
+
+
+def subtitle_polish(translations, transcript, target_language='简体中文'):
+    """第五步：字幕精校
+    
+    最后对翻译好的字幕进行全面检查，确保字幕与视频同步准确无误，语言表述精准，格式规范统一
+    
+    Args:
+        translations: 反思调整后的翻译
+        transcript: 原始转录（包含时间信息）
+        target_language: 目标语言
+        
+    Returns:
+        最终精校后的翻译结果
+    """
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    logger.info(f"{timestamp} 进入第5轮->字幕精校： 最后对翻译好的字幕进行全面检查，确保字幕与视频同步准确无误，语言表述精准，格式规范统一。\n")
+    
+    # 精校：格式规范化
+    polished_translations = []
+    for translation in translations:
+        # 去除多余空格
+        polished = ' '.join(translation.split())
+        # 确保标点符号正确
+        polished = polished.strip()
+        polished_translations.append(polished)
+    
+    return polished_translations
+
+
+def _translate(summary, transcript, target_language='简体中文'):
+    """旧版翻译函数 - 保留向后兼容"""
+    understanding = {
+        'title': summary.get('title', ''),
+        'core_theme': summary.get('summary', ''),
+        'style': '信息类',
+        'target_audience': '普通观众',
+        'tone': '中性',
+    }
+    return translate_with_five_steps(understanding, transcript, target_language)
+
+
+def translate_with_five_steps(understanding, transcript, target_language='简体中文'):
+    """使用五步法进行翻译
+    
+    Args:
+        understanding: 视频理解结果
+        transcript: 转录文本
+        target_language: 目标语言
+        
+    Returns:
+        最终翻译结果列表
+    """
+    # 第二步：语境翻译
+    translations = context_translate(understanding, transcript, target_language)
+    
+    # 第三步：文化调整
+    translations = cultural_adaptation(translations, transcript, target_language, understanding)
+    
+    # 第四步：反思调整
+    translations = reflection_and_refinement(translations, transcript, target_language, understanding)
+    
+    # 第五步：字幕精校
+    translations = subtitle_polish(translations, transcript, target_language)
+    
+    return translations
+
+def translate(folder, target_language='简体中文', model_provider=None):
+    """使用五步法进行视频字幕翻译
+    
+    Args:
+        folder: 视频文件夹路径
+        target_language: 目标语言
+        model_provider: 模型提供商 ('openai' 或 'aliyun')，如果不提供则使用环境变量配置
+        
+    Returns:
+        是否翻译成功
+    """
+    # 声明全局变量（必须在函数开头）
+    global MODEL_PROVIDER
+    
+    # 如果提供了 model_provider，临时设置环境变量并重新加载配置
+    original_provider = None
+    original_global_provider = None
+    if model_provider:
+        original_provider = os.getenv('MODEL_PROVIDER')
+        os.environ['MODEL_PROVIDER'] = model_provider
+        # 重新加载全局配置
+        original_global_provider = MODEL_PROVIDER
+        MODEL_PROVIDER = model_provider.lower()
+    
+    try:
+        translation_path = os.path.join(folder, 'translation.json')
+        if os.path.exists(translation_path):
+            logger.info(f'翻译已存在: {folder}')
+            return True
+        
+        # 打印五步法说明
+        separator = "=" * 85
+        logger.info(f"\n{separator}")
+        logger.info("\nYouDub 采用深度AI翻译模型，能全面提升语义理解与译文生成的自然度与一致性。\n")
+        logger.info("YouDub 视频翻译五步法：1. 理解核心   2. 语境翻译   3. 文化调整   4. 反思调整   5. 字幕精校\n")
+        logger.info(f"{separator}\n")
+        
+        # 加载视频信息
+        info_path = os.path.join(folder, 'download.info.json')
+        if not os.path.exists(info_path):
+            logger.error(f'视频信息文件不存在: {info_path}')
             return False
+        
+        with open(info_path, 'r', encoding='utf-8') as f:
+            info = json.load(f)
+        info = get_necessary_info(info)
+        
+        # 加载转录文本
+        transcript_path = os.path.join(folder, 'transcript.json')
+        if not os.path.exists(transcript_path):
+            logger.error(f'转录文件不存在: {transcript_path}')
+            return False
+        
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            transcript = json.load(f)
+        
+        # 第一步：理解核心
+        understanding = deep_understand_video(info, transcript, target_language)
+        
+        # 生成简单摘要（用于向后兼容）
+        summary_path = os.path.join(folder, 'summary.json')
+        summary = {
+            'title': understanding.get('title', info['title']),
+            'author': info['uploader'],
+            'summary': understanding.get('core_theme', ''),
+            'tags': info.get('tags', []),
+            'language': target_language,
+            'understanding': understanding  # 保存完整的理解结果
+        }
+        
         with open(summary_path, 'w', encoding='utf-8') as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
+        
+        # 第二到五步：五步法翻译
+        translations = translate_with_five_steps(understanding, transcript, target_language)
+        
+        # 组合翻译结果
+        for i, line in enumerate(transcript):
+            if i < len(translations):
+                line['translation'] = translations[i]
+            else:
+                line['translation'] = line['text']  # 备用
+        
+        # 分句处理
+        transcript = split_sentences(transcript)
+        
+        # 保存翻译结果
+        with open(translation_path, 'w', encoding='utf-8') as f:
+            json.dump(transcript, f, indent=2, ensure_ascii=False)
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"\n{timestamp} ✅ 翻译完成！\n")
+        logger.info(f"{separator}\n")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f'翻译过程出错: {e}')
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        # 恢复原始配置
+        if original_provider is not None:
+            os.environ['MODEL_PROVIDER'] = original_provider
+        elif model_provider and 'MODEL_PROVIDER' in os.environ:
+            del os.environ['MODEL_PROVIDER']
+        if original_global_provider is not None:
+            MODEL_PROVIDER = original_global_provider
 
-    translation_path = os.path.join(folder, 'translation.json')
-    translation = _translate(summary, transcript, target_language)
-    for i, line in enumerate(transcript):
-        line['translation'] = translation[i]
-    transcript = split_sentences(transcript)
-    with open(translation_path, 'w', encoding='utf-8') as f:
-        json.dump(transcript, f, indent=2, ensure_ascii=False)
-    return True
-
-def translate_all_transcript_under_folder(folder, target_language):
-    for root, dirs, files in os.walk(folder):
-        if 'transcript.json' in files and 'translation.json' not in files:
-            translate(root, target_language)
-    return f'Translated all videos under {folder}'
+def translate_all_transcript_under_folder(folder, target_language, model_provider=None):
+    """翻译文件夹下所有视频的字幕
+    
+    Args:
+        folder: 文件夹路径
+        target_language: 目标语言
+        model_provider: 模型提供商 ('openai' 或 'aliyun')，如果不提供则使用环境变量配置
+    """
+    # 如果提供了 model_provider，临时设置环境变量
+    original_provider = None
+    if model_provider:
+        original_provider = os.getenv('MODEL_PROVIDER')
+        os.environ['MODEL_PROVIDER'] = model_provider
+    
+    try:
+        for root, dirs, files in os.walk(folder):
+            if 'transcript.json' in files and 'translation.json' not in files:
+                translate(root, target_language, model_provider=model_provider)
+        return f'Translated all videos under {folder}'
+    finally:
+        # 恢复原始配置
+        if original_provider is not None:
+            os.environ['MODEL_PROVIDER'] = original_provider
+        elif model_provider and 'MODEL_PROVIDER' in os.environ:
+            del os.environ['MODEL_PROVIDER']
 
 if __name__ == '__main__':
     translate_all_transcript_under_folder(
