@@ -168,3 +168,8 @@ download_list.txt
 get_upload_link.txt
 launch.json
 remove_mp4.py
+
+# Cookies files (隐私安全，不要提交到 Git)
+cookies.txt
+*.cookies.txt
+youtube_cookies.txt

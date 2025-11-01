@@ -208,44 +208,76 @@ def _get_cookies_options() -> Dict[str, Any]:
     """
     cookies_opts = {}
     
-    # 尝试从浏览器自动提取 cookies（优先 Chrome/Edge）
-    try:
-        system = platform.system()
-        if system == 'Darwin':  # macOS
-            # macOS Chrome
-            chrome_cookies = os.path.expanduser('~/Library/Application Support/Google/Chrome/Default/Cookies')
-            if os.path.exists(chrome_cookies):
-                cookies_opts['cookiesfrombrowser'] = ('chrome',)
-                logger.info('使用 Chrome cookies (macOS)')
-                return cookies_opts
-        elif system == 'Linux':
-            # Linux Chrome
-            chrome_cookies = os.path.expanduser('~/.config/google-chrome/Default/Cookies')
-            if os.path.exists(chrome_cookies):
-                cookies_opts['cookiesfrombrowser'] = ('chrome',)
-                logger.info('使用 Chrome cookies (Linux)')
-                return cookies_opts
-        elif system == 'Windows':
-            # Windows Chrome
-            chrome_cookies = os.path.expanduser('~/AppData/Local/Google/Chrome/User Data/Default/Cookies')
-            if os.path.exists(chrome_cookies):
-                cookies_opts['cookiesfrombrowser'] = ('chrome',)
-                logger.info('使用 Chrome cookies (Windows)')
-                return cookies_opts
-    except Exception as e:
-        logger.debug(f'无法自动检测浏览器 cookies: {e}')
-    
-    # 检查环境变量中的 cookies 文件路径
+    # 优先检查环境变量中的 cookies 文件路径
     cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
     if cookies_file and os.path.exists(cookies_file):
         cookies_opts['cookies'] = cookies_file
-        logger.info(f'使用自定义 cookies 文件: {cookies_file}')
+        logger.info(f'✓ 使用自定义 cookies 文件: {cookies_file}')
         return cookies_opts
     
+    # 尝试从浏览器自动提取 cookies（使用 yt-dlp 的 cookiesfrombrowser）
+    try:
+        system = platform.system()
+        browsers_to_try = []
+        
+        if system == 'Darwin':  # macOS
+            browsers_to_try = ['chrome', 'safari', 'firefox', 'edge']
+        elif system == 'Linux':
+            browsers_to_try = ['chrome', 'chromium', 'firefox', 'opera', 'edge']
+        elif system == 'Windows':
+            browsers_to_try = ['chrome', 'edge', 'firefox', 'opera']
+        
+        # 尝试每个浏览器（直接使用，yt-dlp 会自动处理）
+        for browser in browsers_to_try:
+            try:
+                # 直接设置 cookiesfrombrowser，yt-dlp 会自动查找浏览器
+                cookies_opts['cookiesfrombrowser'] = (browser,)
+                logger.info(f'尝试使用 {browser} 浏览器的 cookies...')
+                # 直接返回，让 yt-dlp 在实际使用时处理
+                logger.info(f'✓ 将尝试使用 {browser} 浏览器的 cookies')
+                return cookies_opts
+            except Exception as e:
+                logger.debug(f'{browser} 浏览器不可用: {e}')
+                continue
+        
+        # 如果所有浏览器都不可用，尝试检查 Chrome cookies 文件是否存在
+        system = platform.system()
+        chrome_paths = []
+        if system == 'Darwin':
+            chrome_paths = [
+                os.path.expanduser('~/Library/Application Support/Google/Chrome/Default/Cookies'),
+                os.path.expanduser('~/Library/Application Support/Google/Chrome/Profile 1/Cookies')
+            ]
+        elif system == 'Linux':
+            chrome_paths = [
+                os.path.expanduser('~/.config/google-chrome/Default/Cookies'),
+                os.path.expanduser('~/.config/google-chrome/Profile 1/Cookies'),
+                os.path.expanduser('~/.config/chromium/Default/Cookies')
+            ]
+        elif system == 'Windows':
+            chrome_paths = [
+                os.path.expanduser('~/AppData/Local/Google/Chrome/User Data/Default/Cookies'),
+                os.path.expanduser('~/AppData/Local/Google/Chrome/User Data/Profile 1/Cookies')
+            ]
+        
+        for chrome_path in chrome_paths:
+            if os.path.exists(chrome_path):
+                cookies_opts['cookiesfrombrowser'] = ('chrome',)
+                logger.info(f'✓ 检测到 Chrome cookies 文件，将使用 Chrome cookies')
+                return cookies_opts
+                
+    except Exception as e:
+        logger.debug(f'无法自动检测浏览器 cookies: {e}')
+    
     # 如果都没有，返回空字典（不使用 cookies）
-    logger.warning('未检测到浏览器 cookies，可能会遇到 YouTube bot 验证。建议：')
-    logger.warning('1. 设置环境变量 YOUTUBE_COOKIES_FILE 指向 cookies.txt 文件')
-    logger.warning('2. 或使用浏览器扩展导出 cookies（如 Get cookies.txt LOCALLY）')
+    logger.warning('⚠ 未检测到浏览器 cookies，可能会遇到 YouTube bot 验证')
+    logger.warning('解决方案：')
+    logger.warning('1. 设置环境变量: export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
+    logger.warning('2. 使用浏览器扩展导出 cookies（推荐）：')
+    logger.warning('   - Chrome/Edge: 安装 "Get cookies.txt LOCALLY" 扩展')
+    logger.warning('   - 登录 YouTube -> 点击扩展 -> 导出 cookies.txt')
+    logger.warning('   - 然后运行: export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
+    logger.warning('3. 查看详细指南: cat COOKIES_GUIDE.md')
     return cookies_opts
 
 
@@ -319,11 +351,28 @@ def download_from_url(
         except yt_dlp.utils.ExtractorError as e:
             error_msg = str(e)
             if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
-                logger.error(f'YouTube bot 验证失败: {u}')
+                logger.error(f'❌ YouTube bot 验证失败: {u}')
+                logger.error('')
+                logger.error('当前 cookies 配置：')
+                if 'cookiesfrombrowser' in cookies_opts:
+                    browser = cookies_opts['cookiesfrombrowser'][0] if isinstance(cookies_opts['cookiesfrombrowser'], (list, tuple)) else str(cookies_opts['cookiesfrombrowser'])
+                    logger.error(f'  - 使用浏览器: {browser} (cookiesfrombrowser)')
+                elif 'cookies' in cookies_opts:
+                    logger.error(f'  - Cookies 文件: {cookies_opts["cookies"]}')
+                else:
+                    logger.error('  - 未配置 cookies')
+                logger.error('')
                 logger.error('解决方案：')
-                logger.error('1. 设置环境变量: export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
-                logger.error('2. 导出 cookies：使用浏览器扩展（如 "Get cookies.txt LOCALLY"）')
-                logger.error('3. 或使用 yt-dlp 的 --cookies-from-browser 选项')
+                logger.error('1. 【推荐】使用浏览器扩展导出 cookies.txt:')
+                logger.error('   - Chrome/Edge: 安装 "Get cookies.txt LOCALLY" 扩展')
+                logger.error('   - Firefox: 安装 "cookies.txt" 扩展')
+                logger.error('   - 登录 YouTube -> 点击扩展图标 -> 导出 cookies.txt')
+                logger.error('   - 设置: export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
+                logger.error('')
+                logger.error('2. 或手动设置环境变量:')
+                logger.error('   export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
+                logger.error('')
+                logger.error('3. 查看详细指南: cat COOKIES_GUIDE.md')
             else:
                 logger.error(f'Failed to extract info from {u}: {e}')
         except Exception as e:

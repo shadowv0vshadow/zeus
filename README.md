@@ -148,6 +148,8 @@ git clone https://github.com/liuzhao1225/YouDub-webui.git
 - **Resolution**: 选择下载视频的分辨率。
 - **Number of videos to download**: 设置要下载的视频数量。
 
+**注意**：如果遇到 YouTube bot 验证错误（"Sign in to confirm you're not a bot"），请查看 [COOKIES_GUIDE.md](COOKIES_GUIDE.md) 了解如何获取和使用 cookies 文件。
+
 ### 3. **人声分离 (Demucs Interface)**
 
 此界面用于从视频中分离人声。
