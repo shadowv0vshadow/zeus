@@ -145,9 +145,11 @@ pip install "huggingface-hub>=0.7,<0.9"
 # 安装 pyannote.audio
 pip install "pyannote.audio==2.0.1"
 
-# whisperx 需要的依赖
+# whisperx 需要的依赖（但要注意 gradio 兼容性）
 echo -e "\n${YELLOW}安装 whisperx 依赖...${NC}"
-pip install "pandas>=2.2.3,<2.3.0"
+# whisperx 需要 pandas>=2.2.3，但 gradio 5.49.1 与 pandas 2.2.x 的 infer_objects(copy=True) 不兼容
+# 使用 2.1.x 版本作为折中方案
+pip install "pandas>=2.1.0,<2.2.0" || pip install "pandas>=2.0.0,<2.2.0"
 
 # 可选：安装 TTS（如果需要 XTTS）
 echo -e "\n${YELLOW}是否安装 TTS（XTTS模型）? [y/N]${NC}"

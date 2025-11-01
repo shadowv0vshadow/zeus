@@ -238,6 +238,14 @@ if [[ "$SF_VERSION" == "0.10."* ]]; then
     pip install "soundfile>=0.12.1"
 fi
 
+# 修复 pandas 版本（gradio 5.49.1 需要兼容版本）
+PANDAS_VERSION=$(pip show pandas 2>/dev/null | grep Version | cut -d' ' -f2 || echo "未安装")
+if [[ "$PANDAS_VERSION" == "2.2."* ]] || [[ "$PANDAS_VERSION" == "2.3."* ]]; then
+    echo "检测到 pandas 2.2.x/2.3.x，降级到兼容版本（避免 infer_objects copy 参数问题）..."
+    pip uninstall -y pandas 2>/dev/null || true
+    pip install "pandas>=2.0.0,<2.2.0" || pip install "pandas>=1.5.0,<2.2.0"
+fi
+
 # 7. 验证所有依赖
 echo -e "\n${YELLOW}[7/7] 验证所有依赖...${NC}"
 python3 -c "import numpy; print(f'✓ numpy: {numpy.__version__}')" || echo "✗ numpy"

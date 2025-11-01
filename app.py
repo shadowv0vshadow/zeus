@@ -829,7 +829,8 @@ def generate_tts_with_config(folder, tts_model, aliyun_voice_str, segments_df):
             elif not isinstance(row, (list, tuple)):
                 continue
                 
-            if len(row) >= 5:
+            # 表格只有3列：编号（索引0）、翻译文本（索引1）、使用原声（索引2）
+            if len(row) >= 3:
                 segment_id = str(row[0]).strip()
                 try:
                     segment_num = int(segment_id)
@@ -837,8 +838,8 @@ def generate_tts_with_config(folder, tts_model, aliyun_voice_str, segments_df):
                 except ValueError:
                     pass
                 
-                has_original = row[3] == "✓"
-                use_original_raw = row[4]
+                # 读取使用原声的值（第3列，索引2）
+                use_original_raw = row[2]
                 
                 if isinstance(use_original_raw, bool):
                     use_original = use_original_raw
@@ -848,9 +849,6 @@ def generate_tts_with_config(folder, tts_model, aliyun_voice_str, segments_df):
                     use_original = bool(use_original_raw)
                 else:
                     use_original = str(use_original_raw).lower().strip() in ('true', '1', 'yes', '✓', 'checked')
-                
-                if not has_original:
-                    use_original = False
                 
                 config[segment_id] = use_original
     
@@ -995,7 +993,7 @@ with gr.Blocks(title='YouDub - 语音合成') as tts_interafce:
     tts_submit_btn = gr.Button('一键生成TTS语音合成', variant='primary', size='lg')
     tts_submit_btn.click(
         fn=generate_tts_with_config,
-        inputs=[tts_folder, tts_interface_tts_model, tts_interface_voice_dropdown, tts_segments_table, tts_project_path_state],
+        inputs=[tts_folder, tts_interface_tts_model, tts_interface_voice_dropdown, tts_segments_table],
         outputs=tts_output
     )
     
@@ -1007,13 +1005,13 @@ with gr.Blocks(title='YouDub - 语音合成') as tts_interafce:
     )
 
 genearte_info_interface = gr.Interface(
-    fn = generate_all_info_under_folder,
-    inputs = [
+    fn=generate_all_info_under_folder,
+    inputs=[
         gr.Textbox(label='Folder', value='videos'),
     ],
     outputs='text',
     flagging_mode='never',
-    )
+)
 
 # 视频合成界面（简单版本）
 syntehsize_video_interface = gr.Interface(
