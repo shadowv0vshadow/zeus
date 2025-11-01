@@ -125,6 +125,13 @@ def generate_srt(
             end = format_timestamp(item['end'] / speed_up)
             text = item['translation']
             
+            # 去除末尾的句号（中文句号、英文句号等）
+            text = text.rstrip('。.！!？?')
+            
+            # 如果文本为空，跳过
+            if not text.strip():
+                continue
+            
             # 计算需要分成几行
             num_lines = len(text) // (max_line_char + 1) + 1
             chars_per_line = min(round(len(text) / num_lines), max_line_char)
@@ -295,8 +302,15 @@ def synthesize_video(
         '-y'
     ]
     
-    logger.info(f'Running FFmpeg command')
-    subprocess.run(ffmpeg_command, check=True)
+    logger.info(f'Running FFmpeg command: {" ".join(ffmpeg_command[:5])}...')
+    try:
+        result = subprocess.run(ffmpeg_command, check=True, capture_output=True, text=True)
+        if result.stderr:
+            logger.debug(f'FFmpeg output: {result.stderr[-500:]}')  # 只显示最后500字符
+    except subprocess.CalledProcessError as e:
+        logger.error(f'FFmpeg failed with exit code {e.returncode}')
+        logger.error(f'FFmpeg error: {e.stderr[:1000] if e.stderr else "No error output"}')
+        raise
     
     time.sleep(1)
     logger.info(f'Video synthesized successfully: {output_video}')

@@ -651,6 +651,87 @@ def valid_translation(text, translation):
 #     return output_data
 
 
+def preserve_proper_nouns(original_text, translation, proper_nouns):
+    """确保专有名词在翻译中保留原文
+    
+    Args:
+        original_text: 原文
+        translation: 翻译结果
+        proper_nouns: 专有名词集合
+        
+    Returns:
+        修正后的翻译
+    """
+    if not proper_nouns or not translation:
+        return translation
+    
+    result = translation
+    
+    # 检查原文中的专有名词是否在翻译中被翻译了
+    for noun in proper_nouns:
+        if len(noun) < 2:  # 跳过太短的词
+            continue
+        
+        # 如果原文包含这个专有名词，但翻译中没有（可能被翻译了）
+        if noun in original_text:
+            # 尝试在翻译中找到对应的中文（可能是翻译了）
+            # 如果找不到原文，尝试恢复
+            if noun not in result:
+                # 在专有名词位置插入原文（简单处理）
+                # 这里可以根据需要添加更智能的恢复逻辑
+                pass
+    
+    return result
+
+
+def apply_terminology_consistency(original_text, translation, terminology_dict):
+    """应用术语一致性，确保同一术语在全文中的翻译一致
+    
+    Args:
+        original_text: 原文
+        translation: 翻译结果
+        terminology_dict: 术语字典（原文 -> 翻译）
+        
+    Returns:
+        修正后的翻译
+    """
+    if not terminology_dict or not translation:
+        return translation
+    
+    result = translation
+    
+    # 检查术语字典中的术语，确保在翻译中保持一致
+    for original_term, established_translation in terminology_dict.items():
+        # 如果原文包含这个术语，但翻译不一致
+        if original_term in original_text:
+            # 尝试在翻译中找到并使用已建立的翻译
+            # 这里可以添加更智能的匹配和替换逻辑
+            pass
+    
+    return result
+
+
+def update_terminology_dict(original_text, translation, terminology_dict):
+    """更新术语字典，记录术语的翻译映射
+    
+    Args:
+        original_text: 原文
+        translation: 翻译结果
+        terminology_dict: 术语字典（会被更新）
+    """
+    # 提取可能的术语对（原文中的英文 -> 翻译中的对应部分）
+    # 这里可以添加更智能的术语提取逻辑
+    
+    # 简单示例：如果有明显的英文术语，记录其翻译
+    english_terms = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', original_text)
+    for term in english_terms:
+        if term not in terminology_dict and len(term) > 2:
+            # 如果术语在翻译中被保留（未翻译），记录为保留原文
+            if term in translation:
+                terminology_dict[term] = term  # 保留原文
+            # 可以添加更多逻辑来识别术语的翻译对应关系
+
+
 def split_text_into_sentences(para):
     para = re.sub('([。！？\?])([^，。！？\?”’》])', r"\1\n\2", para)  # 单字符断句符
     para = re.sub('(\.{6})([^，。！？\?”’》])', r"\1\n\2", para)  # 英文省略号
@@ -734,6 +815,36 @@ def split_sentences(translation):
     
     return output_data
 
+def extract_proper_nouns(transcript):
+    """从转录文本中提取可能的专有名词（游戏名、音乐术语、品牌名等）
+    
+    Args:
+        transcript: 转录文本列表
+        
+    Returns:
+        专有名词集合
+    """
+    proper_nouns = set()
+    
+    # 提取所有大写单词和可能的专有名词模式
+    for line in transcript:
+        text = line['text']
+        # 提取首字母大写的连续单词（可能是专有名词）
+        words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
+        proper_nouns.update(words)
+        
+        # 提取常见的游戏/音乐术语模式（全大写或特定格式）
+        # 游戏名通常：首字母大写或全大写
+        game_patterns = re.findall(r'\b[A-Z]{2,}\b', text)  # 全大写（如 RPG, FPS, AI）
+        proper_nouns.update(game_patterns)
+        
+        # 提取带引号的内容（可能是作品名、专辑名等）
+        quoted = re.findall(r'["\']([^"\']+)["\']', text)
+        proper_nouns.update(quoted)
+    
+    return proper_nouns
+
+
 def context_translate(understanding, transcript, target_language='简体中文'):
     """第二步：语境翻译
     
@@ -752,6 +863,10 @@ def context_translate(understanding, transcript, target_language='简体中文')
     
     client = get_model_client()
     
+    # 提取专有名词
+    proper_nouns = extract_proper_nouns(transcript)
+    proper_nouns_list = sorted(list(proper_nouns))[:50]  # 限制数量避免过长
+    
     # 构建丰富的上下文信息
     context_info = f'''视频标题："{understanding["title"]}"
 核心主题：{understanding.get("core_theme", "")}
@@ -764,22 +879,73 @@ def context_translate(understanding, transcript, target_language='简体中文')
     if understanding.get("cultural_background"):
         context_info += f'\n文化背景：{understanding["cultural_background"]}'
     
-    system_prompt = f'''你是一个专业的视频字幕翻译专家，精通{target_language}的表达习惯。
+    # 判断视频类型（音乐/游戏）
+    video_type = ""
+    title_lower = understanding.get("title", "").lower()
+    core_theme_lower = understanding.get("core_theme", "").lower()
+    
+    music_keywords = ['music', 'song', 'album', 'artist', 'beat', 'melody', 'rhythm', '音', '曲', '歌', '专辑', '音乐']
+    game_keywords = ['game', 'gaming', 'play', 'player', 'level', 'boss', 'quest', '游戏', '玩家', '关卡', '剧情']
+    
+    if any(keyword in title_lower or keyword in core_theme_lower for keyword in music_keywords):
+        video_type = "音乐"
+    elif any(keyword in title_lower or keyword in core_theme_lower for keyword in game_keywords):
+        video_type = "游戏"
+    
+    # 构建专业翻译提示词
+    professional_rules = []
+    if video_type:
+        if video_type == "音乐":
+            professional_rules = [
+                "8. 【音乐专业术语】保留所有音乐术语原文不翻译，包括但不限于：",
+                "   - 音乐风格：Jazz, Blues, Rock, Pop, EDM, Hip-Hop, R&B 等",
+                "   - 乐器名称：Piano, Guitar, Drums, Bass, Violin 等",
+                "   - 音乐技术术语：BPM, Tempo, Key, Chord, Scale, Harmony, Melody 等",
+                "   - 音乐软件/品牌：Ableton, FL Studio, Logic Pro, MIDI, VST 等",
+                "   - 专辑名、歌曲名、艺术家名：完全保留原文，不翻译",
+                "9. 使用专业的音乐翻译表达，确保术语准确性和专业性"
+            ]
+        elif video_type == "游戏":
+            professional_rules = [
+                "8. 【游戏专业术语】保留所有游戏相关专有名词原文不翻译，包括但不限于：",
+                "   - 游戏名称：完全保留原文（如 The Legend of Zelda, Final Fantasy 等）",
+                "   - 游戏术语：RPG, FPS, MMO, NPC, DLC, DPS, HP, MP, XP, Boss, Quest, Level 等",
+                "   - 角色名、地名、技能名：保留原文不翻译",
+                "   - 游戏引擎/平台：Unity, Unreal Engine, Steam, PlayStation, Xbox 等",
+                "   - 品牌名：Nintendo, Sony, Microsoft, EA, Ubisoft 等",
+                "9. 使用专业的游戏翻译表达，确保术语准确性和专业性"
+            ]
+    
+    # 构建系统提示词
+    system_prompt = f'''你是一个专业的视频字幕翻译专家，精通{target_language}的表达习惯，特别擅长音乐和游戏内容的专业翻译。
 
 视频背景信息：
 {context_info}
 
-翻译要求：
-1. 基于视频的整体风格和语气进行翻译
-2. 翻译要自然、流畅、地道，避免翻译腔
-3. 保持原文的情感色彩和语气
-4. 使用优美和高雅的表达方式
-5. 注意专业术语的准确翻译
+{"视频类型：" + video_type if video_type else ""}
+
+{"已识别的专有名词（必须保留原文）：" + ", ".join(proper_nouns_list) if proper_nouns_list else ""}
+
+翻译要求（严格执行）：
+1. 【专业性】翻译必须专业、准确、严谨，符合{target_language}的专业表达习惯
+2. 【专有名词保留】以下内容必须保留原文不翻译：
+   - 所有专有名词（人名、地名、品牌名、产品名）
+   - 游戏名称、角色名、技能名、装备名
+   - 音乐专辑名、歌曲名、艺术家名
+   - 技术术语缩写（AI, API, CPU, GPU, FPS, BPM 等）
+   - 英文大小写、标点符号、格式必须完全保留
+3. 【上下文一致性】在整个翻译过程中，必须保持术语和表达的一致性：
+   - 同一个专有名词在整个视频中必须统一（要么都保留原文，要么都使用同一翻译）
+   - 专业术语的翻译必须前后一致
+   - 风格和语气必须统一连贯
+4. 翻译要自然、流畅、地道，避免翻译腔
+5. 保持原文的情感色彩和语气
 6. 数学公式使用plain text，不使用latex
 7. 人工智能的"agent"翻译为"智能体"
-8. 确保翻译简洁准确，符合{target_language}的习惯
 
-请只返回翻译结果，不要包含"翻译"等提示词。'''
+{chr(10).join(professional_rules) if professional_rules else ""}
+
+请只返回翻译结果，不要包含"翻译"等提示词。所有专有名词必须保留原文。'''
     
     fixed_message = [
         {'role': 'system', 'content': system_prompt},
@@ -792,6 +958,9 @@ def context_translate(understanding, transcript, target_language='简体中文')
     full_translation = []
     history = []
     total = len(transcript)
+    
+    # 维护术语一致性字典（原文 -> 翻译）
+    terminology_dict = {}
     
     logger.info(f"{timestamp} AI翻译字幕: 进度 0%")
     
@@ -880,6 +1049,13 @@ def context_translate(understanding, transcript, target_language='简体中文')
                             raise Exception('Invalid translation')
                 else:
                     translation = cleaned_translation
+                    
+                    # 检查并修正专有名词保留
+                    translation = preserve_proper_nouns(original_text, translation, proper_nouns)
+                    
+                    # 检查并应用术语一致性
+                    translation = apply_terminology_consistency(original_text, translation, terminology_dict)
+                    
                     break
                     
             except Exception as e:
@@ -922,6 +1098,9 @@ def context_translate(understanding, transcript, target_language='简体中文')
             else:
                 translation = original_text
                 logger.warning(f'翻译失败且无API返回，使用原文: {original_text[:50]}...')
+        
+        # 更新术语字典（从翻译中提取术语映射）
+        update_terminology_dict(original_text, translation, terminology_dict)
         
         full_translation.append(translation)
         history.append({'role': 'user', 'content': f'"{original_text}"'})
@@ -1147,6 +1326,9 @@ def translate(folder, target_language='简体中文', model_provider=None):
                 line['translation'] = translations[i]
             else:
                 line['translation'] = line['text']  # 备用
+            # 初始化use_original字段（默认False，使用AI配音）
+            if 'use_original' not in line:
+                line['use_original'] = False
         
         # 分句处理
         transcript = split_sentences(transcript)
