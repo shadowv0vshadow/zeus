@@ -14,7 +14,13 @@ import numpy as np
 import requests
 from loguru import logger
 from dotenv import load_dotenv
-from pyannote.audio import Model, Inference
+try:
+    from pyannote.audio import Model, Inference
+    PYANNOTE_AVAILABLE = True
+except ImportError:
+    PYANNOTE_AVAILABLE = False
+    import warnings
+    warnings.warn("pyannote.audio 未安装，字节跳动 TTS 的说话人匹配功能将被禁用。如需使用，请安装: pip install pyannote.audio==2.0.1")
 from scipy.spatial.distance import cosine
 
 load_dotenv()
@@ -54,14 +60,26 @@ request_json = {
     }
 }
 
-embedding_model = Model.from_pretrained(
-    "pyannote/embedding", use_auth_token=os.getenv('HF_TOKEN'))
-embedding_inference = Inference(
-    embedding_model, window="whole")
+# 延迟初始化 embedding_model 和 embedding_inference（仅在需要时创建）
+embedding_model = None
+embedding_inference = None
 
+def _init_embedding_model():
+    """延迟初始化 embedding 模型"""
+    global embedding_model, embedding_inference
+    if not PYANNOTE_AVAILABLE:
+        raise ImportError("pyannote.audio 未安装，无法生成说话人嵌入")
+    if embedding_model is None:
+        embedding_model = Model.from_pretrained(
+            "pyannote/embedding", use_auth_token=os.getenv('HF_TOKEN'))
+        embedding_inference = Inference(embedding_model, window="whole")
+    return embedding_inference
 
 def generate_embedding(wav_path):
-    embedding = embedding_inference(wav_path)
+    if not PYANNOTE_AVAILABLE:
+        raise ImportError("pyannote.audio 未安装，无法生成说话人嵌入。请安装: pip install pyannote.audio==2.0.1")
+    inference = _init_embedding_model()
+    embedding = inference(wav_path)
     return embedding
 
 
@@ -144,7 +162,8 @@ def get_available_speakers():
         while retry > 0:
             try:
                 tts('YouDub 是一个创新的开源工具，专注于将 YouTube 等平台的优质视频翻译和配音为中文版本。此工具融合了先进的 AI 技术，包括语音识别、大型语言模型翻译以及 AI 声音克隆技术，为中文用户提供具有原始 YouTuber 音色的中文配音视频。', output_path, None, voice_type=voice_type)
-                embedding = embedding_inference(output_path)
+                inference = _init_embedding_model()
+                embedding = inference(output_path)
                 np.save(output_path.replace('.wav', '.npy'), embedding)
                 break
             except Exception as e:

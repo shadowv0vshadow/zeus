@@ -1,5 +1,9 @@
 
-# YouDub-webui: 优质视频中文化工具
+# YouDub
+
+> **无GPU服务器用户**: 请查看 [README-CPU.md](README-CPU.md) 了解CPU版本的安装指南。
+
+## YouDub-webui: 优质视频中文化工具
 ## 目录
 - [YouDub-webui: 优质视频中文化工具](#youdub-webui-优质视频中文化工具)
   - [目录](#目录)

@@ -46,7 +46,17 @@ echo -e "\n${YELLOW}安装 PyTorch（兼容 demucs 版本）...${NC}"
 # 检测是否有 NVIDIA GPU 且 CUDA 可用
 HAS_GPU=false
 if command -v nvidia-smi &> /dev/null; then
-    HAS_GPU=true
+    # 进一步检查 CUDA 是否真的可用（nvidia-smi 存在不代表 PyTorch 能用 CUDA）
+    if nvidia-smi &> /dev/null; then
+        HAS_GPU=true
+    fi
+fi
+
+# 支持环境变量强制 CPU 模式
+FORCE_CPU="${FORCE_CPU:-false}"
+if [[ "$FORCE_CPU" == "true" ]] || [[ "$FORCE_CPU" == "1" ]]; then
+    HAS_GPU=false
+    echo -e "${YELLOW}环境变量 FORCE_CPU=true，强制使用 CPU 模式${NC}"
 fi
 
 # 检查是否需要安装或重新安装（确保版本兼容 demucs）
