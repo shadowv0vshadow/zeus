@@ -1055,4 +1055,4 @@ app = gr.TabbedInterface(
     tab_names=['全自动', '下载视频', '人声分离', '语音识别', '字幕翻译', '语音合成', '视频合成', '上传B站'],
     title='YouDub')
 if __name__ == '__main__':
-    app.launch()
+    app.launch(server_name='0.0.0.0', server_port=7860)
