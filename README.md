@@ -70,12 +70,30 @@
 git clone https://github.com/liuzhao1225/YouDub-webui.git
 ```
 
-### 2. 安装依赖
+### 2. 安装系统依赖
+
+**安装 FFmpeg（必需）：**
+
+FFmpeg 是处理视频和音频的必需工具。请根据您的操作系统安装：
+
+- **macOS**: `brew install ffmpeg`
+- **Ubuntu/Debian**: `sudo apt install ffmpeg`
+- **Windows**: 使用 Chocolatey `choco install ffmpeg` 或手动下载
+
+详细安装指南请查看 [FFMPEG_INSTALL.md](FFMPEG_INSTALL.md)。
+
+**验证 FFmpeg 安装：**
+```bash
+ffmpeg -version
+```
+
+### 3. 安装 Python 依赖
 您可以选择自动安装或手动安装依赖：
 
 #### 自动安装
-- 进入 `YouDub-webui` 目录，运行 `setup_windows` 脚本。
-- 脚本会在当前目录创建一个 `venv` 虚拟环境，并自动安装所需依赖，包括 CUDA 12.1 版本的 PyTorch。
+- **macOS/Linux**: 进入 `YouDub-webui` 目录，运行 `./setup.sh` 脚本。
+- **Windows**: 运行 `setup_windows.bat` 脚本。
+- 脚本会在当前目录创建一个 `venv` 虚拟环境，并自动安装所需依赖，包括 CUDA 版本的 PyTorch（如果有 GPU）。
 
 #### 手动安装
 - 进入 `YouDub-webui` 目录，使用以下命令安装依赖：
@@ -89,7 +107,7 @@ git clone https://github.com/liuzhao1225/YouDub-webui.git
   ```
 - 默认安装为 CPU 版本的 PyTorch 如果你需要手动安装特定 CUDA 版本的 PyTorch，可根据您的 CUDA 版本从 [PyTorch 官方网站](https://pytorch.org/) 获取安装命令。
 
-### 3. 环境设置
+### 4. 环境设置
 在运行前，请配置环境变量：
 
 - **环境变量配置**：将 `.env.example` 改名为 `.env` 并填入以下环境变量：
@@ -99,9 +117,10 @@ git clone https://github.com/liuzhao1225/YouDub-webui.git
   - `HF_TOKEN`: Hugging Face token，用于 speaker diarization 功能。
   - `HF_ENDPOINT`: 如果从 `huggingface` 下载模型时出错，可以添加此环境变量。
   - `APPID` 和 `ACCESS_TOKEN`: 火山引擎 TTS 所需的凭据。
-  - `BILI_BASE64`: Bilibili API 所需的凭据。获取方法请参考 [bilibili-toolman 准备凭据](https://github.com/mos9527/bilibili-toolman?tab=readme-ov-file#%E5%87%86%E5%A4%87%E5%87%AD%E6%8D%AE)。
+  - `BILI_SESSDATA` 和 `BILI_BILI_JCT`: Bilibili 上传所需的 Cookie。获取方法请查看 [BILIBILI_COOKIES_GUIDE.md](BILIBILI_COOKIES_GUIDE.md)。
+  - `BILI_BASE64`: Bilibili API 所需的凭据（旧版，可选）。获取方法请参考 [bilibili-toolman 准备凭据](https://github.com/mos9527/bilibili-toolman?tab=readme-ov-file#%E5%87%86%E5%A4%87%E5%87%AD%E6%8D%AE)。
 
-### 4. 运行程序
+### 5. 运行程序
 选择以下任一方式运行程序：
 
 #### 自动运行
@@ -148,7 +167,9 @@ git clone https://github.com/liuzhao1225/YouDub-webui.git
 - **Resolution**: 选择下载视频的分辨率。
 - **Number of videos to download**: 设置要下载的视频数量。
 
-**注意**：如果遇到 YouTube bot 验证错误（"Sign in to confirm you're not a bot"），请查看 [COOKIES_GUIDE.md](COOKIES_GUIDE.md) 了解如何获取和使用 cookies 文件。
+**注意**：
+- 如果遇到 YouTube bot 验证错误（"Sign in to confirm you're not a bot"），请设置 `YOUTUBE_COOKIES_FILE` 环境变量指向 cookies 文件。
+- 如果遇到视频格式警告（"Possible MPEG-TS in MP4 container"），请确保已安装 FFmpeg。查看 [FFMPEG_INSTALL.md](FFMPEG_INSTALL.md) 了解安装方法。
 
 ### 3. **人声分离 (Demucs Interface)**
 

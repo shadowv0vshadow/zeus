@@ -72,6 +72,57 @@ def get_target_folder(info, folder_path):
     return output_folder
 
 
+def _ensure_download_mp4(folder: str) -> None:
+    """确保下载的文件名为 download.mp4
+
+    检查文件夹中是否有名为 download（无扩展名）或 download.* 的文件，
+    如果有，重命名为 download.mp4（如果还不是的话）。
+
+    Args:
+        folder: 视频文件夹路径
+    """
+    download_mp4 = os.path.join(folder, "download.mp4")
+
+    # 如果已经是 download.mp4，直接返回
+    if os.path.exists(download_mp4):
+        return
+
+    # 查找可能的下载文件
+    possible_files = [
+        os.path.join(folder, "download"),  # 无扩展名
+        os.path.join(folder, "download.webm"),
+        os.path.join(folder, "download.mkv"),
+        os.path.join(folder, "download.m4v"),
+    ]
+
+    for file_path in possible_files:
+        if os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+            if file_size > 0:  # 确保文件不为空
+                # 重命名为 download.mp4
+                try:
+                    os.rename(file_path, download_mp4)
+                    logger.info(f"Renamed {os.path.basename(file_path)} to download.mp4")
+                    return
+                except Exception as e:
+                    logger.warning(f"Failed to rename {file_path} to download.mp4: {e}")
+
+    # 如果都没找到，检查是否有其他以 download 开头的文件
+    try:
+        for filename in os.listdir(folder):
+            if filename.startswith("download") and not filename.endswith((".json", ".webp", ".jpg", ".png")):
+                file_path = os.path.join(folder, filename)
+                if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
+                    try:
+                        os.rename(file_path, download_mp4)
+                        logger.info(f"Renamed {filename} to download.mp4")
+                        return
+                    except Exception as e:
+                        logger.warning(f"Failed to rename {filename} to download.mp4: {e}")
+    except Exception as e:
+        logger.warning(f"Error checking folder {folder}: {e}")
+
+
 def download_single_video(info, folder_path, resolution="1080p"):
     """下载单个视频"""
     sanitized_title = sanitize_title(info.get("title", "Unknown"))
@@ -82,8 +133,21 @@ def download_single_video(info, folder_path, resolution="1080p"):
         return None
 
     output_folder = os.path.join(folder_path, sanitized_uploader, f"{upload_date} {sanitized_title}")
-    if os.path.exists(os.path.join(output_folder, "download.mp4")):
+    # 检查是否存在下载的视频文件（可能是 .mp4, .webm, .mkv 等，或无扩展名）
+    download_mp4 = os.path.join(output_folder, "download.mp4")
+    download_webm = os.path.join(output_folder, "download.webm")
+    download_mkv = os.path.join(output_folder, "download.mkv")
+    download_no_ext = os.path.join(output_folder, "download")
+
+    if os.path.exists(download_mp4):
         logger.info(f"Video already downloaded in {output_folder}")
+        return output_folder
+    elif (
+        os.path.exists(download_webm)
+        or os.path.exists(download_mkv)
+        or (os.path.exists(download_no_ext) and os.path.getsize(download_no_ext) > 0)
+    ):
+        logger.info(f"Video file found (may need renaming) in {output_folder}")
         return output_folder
 
     # 获取 cookies 文件路径
@@ -94,8 +158,9 @@ def download_single_video(info, folder_path, resolution="1080p"):
         "format": f"bestvideo[ext=mp4][height<={resolution_value}]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "writeinfojson": True,
         "writethumbnail": True,
-        "outtmpl": os.path.join(output_folder, "download"),
+        "outtmpl": os.path.join(output_folder, "download.%(ext)s"),  # 自动添加扩展名
         "ignoreerrors": True,
+        "merge_output_format": "mp4",  # 强制合并为 MP4
     }
 
     # 添加 cookies（使用 cookiefile，这是 yt-dlp 支持的参数名）
@@ -111,6 +176,10 @@ def download_single_video(info, folder_path, resolution="1080p"):
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([webpage_url])
+
+        # 确保文件名为 download.mp4（如果下载的文件没有扩展名或扩展名不对）
+        _ensure_download_mp4(output_folder)
+
         logger.info(f"Video downloaded in {output_folder}")
         return output_folder
     except Exception as e:

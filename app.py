@@ -15,7 +15,8 @@ from youdub.step040_tts import (
 )
 from youdub.step050_synthesize_video import synthesize_all_video_under_folder, synthesize_video
 from youdub.step060_genrate_info import generate_all_info_under_folder
-from youdub.step070_upload_bilibili import upload_all_videos_under_folder
+from youdub.step070_upload_bilibili import upload_all_videos_under_folder, upload_video, get_all_upload_projects
+from youdub.step060_genrate_info import resize_thumbnail
 from youdub.do_everything import do_everything
 from youdub.step043_tts_aliyun import get_available_voices, DEFAULT_VOICES
 import os
@@ -1204,14 +1205,213 @@ genearte_info_interface = gr.Interface(
     flagging_mode="never",
 )
 
-upload_bilibili_interface = gr.Interface(
-    fn=upload_all_videos_under_folder,
-    inputs=[
-        gr.Textbox(label="Folder", value="videos"),  # Changed 'default' to 'value'
-    ],
-    outputs="text",
-    flagging_mode="never",
-)
+
+def refresh_projects_for_upload(folder):
+    """刷新项目列表（用于上传界面）
+    只要求有 video.mp4 即可
+    """
+    projects = get_all_upload_projects(folder)
+
+    if not projects:
+        return gr.Dropdown(choices=[], value=None), {}
+
+    project_choices = [f"{p['name']} - {p['title'][:50]} [{p['upload_status']}]" for p in projects]
+    project_paths = {f"{p['name']} - {p['title'][:50]} [{p['upload_status']}]": p["path"] for p in projects}
+
+    return gr.Dropdown(choices=project_choices, value=project_choices[0] if project_choices else None), project_paths
+
+
+def upload_single_project(project_choice, project_paths_dict):
+    """上传单个项目"""
+    if not project_choice or not project_paths_dict:
+        return "❌ 请先选择项目"
+
+    project_path = project_paths_dict.get(project_choice)
+    if not project_path or not os.path.exists(project_path):
+        return f"❌ 项目路径不存在: {project_path}"
+
+    try:
+        success = upload_video(project_path)
+        if success:
+            # 重新刷新项目列表
+            projects = get_all_upload_projects(os.path.dirname(project_path))
+            project_choices = [f"{p['name']} - {p['title'][:50]} [{p['upload_status']}]" for p in projects]
+            project_paths = {f"{p['name']} - {p['title'][:50]} [{p['upload_status']}]": p["path"] for p in projects}
+            return f"✅ 上传成功！\n项目: {os.path.basename(project_path)}"
+        else:
+            return f"❌ 上传失败（可能是缺少必需文件）\n项目: {os.path.basename(project_path)}"
+    except Exception as e:
+        import traceback
+
+        return f"❌ 上传失败: {str(e)}\n{traceback.format_exc()}"
+
+
+# 使用 Blocks 来支持动态交互
+with gr.Blocks(title="YouDub - 上传B站") as upload_bilibili_interface:
+    gr.Markdown("# 上传B站")
+    gr.Markdown("选择项目并上传到 Bilibili。只有包含 video.mp4 和 summary.json 的项目才能上传。")
+
+    # 项目选择
+    upload_folder = gr.Textbox(label="Folder", value="videos", info="视频文件夹路径")
+    upload_refresh_projects_btn = gr.Button("刷新项目列表", variant="secondary", size="sm")
+    upload_project_dropdown = gr.Dropdown(
+        label="选择项目", choices=[], value=None, info="请选择要上传的项目（需要包含 video.mp4 和 summary.json）"
+    )
+    upload_project_paths_dict_state = gr.State(value={})  # 存储项目路径字典
+
+    # 项目信息
+    upload_project_info = gr.Textbox(
+        label="项目信息", lines=5, interactive=False, placeholder="选择项目后，这里会显示项目信息"
+    )
+
+    # 生成封面按钮
+    upload_generate_cover_btn = gr.Button("生成封面图片", variant="secondary", size="sm")
+
+    # 上传按钮
+    upload_submit_btn = gr.Button("上传到B站", variant="primary", size="lg")
+    upload_output = gr.Textbox(label="上传结果", lines=10)
+
+    # 当folder改变时自动刷新项目列表
+    upload_folder.change(
+        fn=refresh_projects_for_upload,
+        inputs=[upload_folder],
+        outputs=[upload_project_dropdown, upload_project_paths_dict_state],
+    )
+
+    # 刷新项目列表
+    upload_refresh_projects_btn.click(
+        fn=refresh_projects_for_upload,
+        inputs=[upload_folder],
+        outputs=[upload_project_dropdown, upload_project_paths_dict_state],
+    )
+
+    # 当项目选择改变时，更新项目信息
+    def update_upload_project_info(project_choice, project_paths_dict):
+        if not project_choice or not project_paths_dict:
+            return ""
+
+        project_path = project_paths_dict.get(project_choice)
+        if not project_path:
+            return ""
+
+        info_lines = [f"项目路径: {project_path}"]
+
+        # 检查文件状态
+        video_path = os.path.join(project_path, "video.mp4")
+        summary_path = os.path.join(project_path, "summary.json")
+        cover_path = os.path.join(project_path, "video.png")
+        bilibili_json_path = os.path.join(project_path, "bilibili.json")
+
+        info_lines.append(f"视频文件: {'✅ 存在' if os.path.exists(video_path) else '❌ 不存在'}")
+        info_lines.append(f"摘要文件: {'✅ 存在' if os.path.exists(summary_path) else '❌ 不存在'}")
+
+        # 检查封面图片状态
+        if os.path.exists(cover_path):
+            info_lines.append(f"封面图片: ✅ 存在")
+        else:
+            # 检查是否有可用的缩略图
+            possible_covers = [
+                os.path.join(project_path, "download.webp"),
+                os.path.join(project_path, "download.jpg"),
+                os.path.join(project_path, "download.png"),
+            ]
+            has_thumbnail = False
+            thumbnail_path = None
+            for possible_cover in possible_covers:
+                if os.path.exists(possible_cover):
+                    has_thumbnail = True
+                    thumbnail_path = os.path.basename(possible_cover)
+                    break
+
+            if has_thumbnail:
+                info_lines.append(f"封面图片: ⚠️ 不存在，但找到缩略图 {thumbnail_path}（上传时将自动生成）")
+            else:
+                info_lines.append(f"封面图片: ❌ 不存在（上传可能失败）")
+
+        # 检查上传状态
+        upload_status = "未上传"
+        if os.path.exists(bilibili_json_path):
+            try:
+                with open(bilibili_json_path, "r", encoding="utf-8") as f:
+                    result = json.load(f)
+                    if result.get("results", [{}])[0].get("code") == 0:
+                        upload_status = "✅ 已上传"
+                    else:
+                        upload_status = "❌ 上传失败"
+            except:
+                upload_status = "⚠️ 状态未知"
+
+        info_lines.append(f"上传状态: {upload_status}")
+
+        return "\n".join(info_lines)
+
+    def generate_cover_image(project_choice, project_paths_dict):
+        """生成封面图片"""
+        if not project_choice or not project_paths_dict:
+            return "❌ 请先选择项目", ""
+
+        project_path = project_paths_dict.get(project_choice)
+        if not project_path or not os.path.exists(project_path):
+            return f"❌ 项目路径不存在: {project_path}", ""
+
+        cover_path = os.path.join(project_path, "video.png")
+        if os.path.exists(cover_path):
+            updated_info = update_upload_project_info(project_choice, project_paths_dict)
+            return f"✅ 封面图片已存在: {cover_path}", updated_info
+
+        try:
+            # 检查是否有缩略图
+            image_suffix = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+            thumbnail_found = False
+            thumbnail_path = None
+            for suffix in image_suffix:
+                possible_path = os.path.join(project_path, f"download{suffix}")
+                if os.path.exists(possible_path):
+                    thumbnail_found = True
+                    thumbnail_path = possible_path
+                    break
+
+            if not thumbnail_found:
+                updated_info = update_upload_project_info(project_choice, project_paths_dict)
+                return (
+                    "❌ 未找到缩略图文件（download.webp、download.jpg 等）\n请确保视频已下载并且包含缩略图",
+                    updated_info,
+                )
+
+            # 使用 resize_thumbnail 函数生成封面
+            generated_path = resize_thumbnail(project_path)
+            if generated_path and os.path.exists(generated_path):
+                # 更新项目信息
+                updated_info = update_upload_project_info(project_choice, project_paths_dict)
+                return f"✅ 封面图片生成成功！\n路径: {generated_path}", updated_info
+            else:
+                updated_info = update_upload_project_info(project_choice, project_paths_dict)
+                return "❌ 封面图片生成失败", updated_info
+        except Exception as e:
+            import traceback
+
+            updated_info = update_upload_project_info(project_choice, project_paths_dict)
+            return f"❌ 生成封面图片失败: {str(e)}\n{traceback.format_exc()}", updated_info
+
+    upload_project_dropdown.change(
+        fn=update_upload_project_info,
+        inputs=[upload_project_dropdown, upload_project_paths_dict_state],
+        outputs=[upload_project_info],
+    )
+
+    # 生成封面按钮
+    upload_generate_cover_btn.click(
+        fn=generate_cover_image,
+        inputs=[upload_project_dropdown, upload_project_paths_dict_state],
+        outputs=[upload_output, upload_project_info],
+    )
+
+    # 上传按钮（上传时会自动生成封面，但如果提前生成也可以）
+    upload_submit_btn.click(
+        fn=upload_single_project,
+        inputs=[upload_project_dropdown, upload_project_paths_dict_state],
+        outputs=[upload_output],
+    )
 
 app = gr.TabbedInterface(
     interface_list=[

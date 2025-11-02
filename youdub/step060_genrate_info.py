@@ -4,11 +4,26 @@ from PIL import Image
 
 
 def resize_thumbnail(folder, size=(1280, 960)):
+    """从缩略图生成封面图片
+
+    Args:
+        folder: 视频文件夹路径
+        size: 目标尺寸 (宽度, 高度)，默认 1280x960
+
+    Returns:
+        生成的封面图片路径，如果失败返回 None
+    """
     image_suffix = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+    image_path = None
     for suffix in image_suffix:
-        image_path = os.path.join(folder, f"download{suffix}")
-        if os.path.exists(image_path):
+        possible_path = os.path.join(folder, f"download{suffix}")
+        if os.path.exists(possible_path):
+            image_path = possible_path
             break
+
+    if not image_path:
+        raise FileNotFoundError(f"未找到缩略图文件（download.webp、download.jpg 等）在文件夹: {folder}")
+
     with Image.open(image_path) as img:
         # Calculate the ratio and the size to maintain aspect ratio
         img_ratio = img.width / img.height
