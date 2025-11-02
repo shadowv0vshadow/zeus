@@ -1,384 +1,353 @@
-"""视频下载模块
-
-该模块提供从 YouTube 和其他平台下载视频的功能
-"""
-
 import os
 import re
-import platform
-from typing import Optional, List, Dict, Any, Generator
-
-import yt_dlp
+import subprocess
+import shutil
+import json
 from loguru import logger
+import yt_dlp
+import io
 
-
-def sanitize_title(title: str) -> str:
-    """清理视频标题，只保留合法字符
-    
-    Args:
-        title: 原始标题
-        
-    Returns:
-        清理后的标题
+def prepare_cookies(input_path=None, output_path=None):
     """
-    # 只保留数字、字母、中文字符、空格、下划线和连字符
+    预处理 cookies 文件，去掉 BOM、转换换行符与编码格式。
+    适用于从浏览器导出的 Netscape 格式 cookies 文件。
+    参数：
+        input_path (str): 原始 cookies 文件路径（人工导出版本），如果为 None，则从环境变量读取
+        output_path (str): 转换后供 yt-dlp 使用的 cookies 文件路径，如果为 None，则使用 input_path
+    返回：
+        str: 输出文件路径（便于后续传递给 yt-dlp），失败返回 None
+    """
+    # 如果没有指定输入路径，尝试从环境变量读取
+    if input_path is None:
+        input_path = os.getenv('YOUTUBE_COOKIES_FILE')
+        if not input_path:
+            logger.warning('未指定 cookies 文件路径，且环境变量 YOUTUBE_COOKIES_FILE 未设置')
+            return None
+    
+    # 展开用户目录（~）
+    input_path = os.path.expanduser(input_path)
+    input_path = os.path.abspath(input_path)
+    
+    # 如果没有指定输出路径，使用输入路径（原地处理）
+    if output_path is None:
+        output_path = input_path
+    else:
+        output_path = os.path.expanduser(output_path)
+        output_path = os.path.abspath(output_path)
+    
+    if not os.path.exists(input_path):
+        logger.error(f"Cookies 文件不存在: {input_path}")
+        return None
+    
+    try:
+        with io.open(input_path, "r", encoding="utf-8-sig") as f:
+            content = f.read().replace("\r\n", "\n")  # 转为 LF
+        with io.open(output_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"Cookies 文件已转换并保存至: {output_path}")
+        return output_path
+    except Exception as e:
+        logger.exception(f"处理 cookies 文件时出错: {e}")
+        return None
+
+def sanitize_title(title):
+    # Only keep numbers, letters, Chinese characters, and spaces
     title = re.sub(r'[^\w\u4e00-\u9fff \d_-]', '', title)
-    # 将多个空格替换为单个空格
+    # Replace multiple spaces with a single space
     title = re.sub(r'\s+', ' ', title)
-    return title.strip()
+    return title
 
 
-def get_target_folder(info: Dict[str, Any], folder_path: str) -> Optional[str]:
-    """根据视频信息获取目标文件夹路径
-    
-    Args:
-        info: 视频信息字典
-        folder_path: 根文件夹路径
-        
-    Returns:
-        目标文件夹路径，如果无法确定则返回 None
-    """
-    sanitized_title = sanitize_title(info.get('title', 'Unknown'))
+def get_target_folder(info, folder_path):
+    sanitized_title = sanitize_title(info['title'])
     sanitized_uploader = sanitize_title(info.get('uploader', 'Unknown'))
     upload_date = info.get('upload_date', 'Unknown')
-    
     if upload_date == 'Unknown':
-        logger.warning(f'No upload date found for video: {sanitized_title}')
         return None
 
     output_folder = os.path.join(
-        folder_path,
-        sanitized_uploader,
-        f'{upload_date} {sanitized_title}'
-    )
+        folder_path, sanitized_uploader, f'{upload_date} {sanitized_title}')
 
     return output_folder
 
-
-def download_single_video(
-    info: Dict[str, Any],
-    folder_path: str,
-    resolution: str = '1080p'
-) -> Optional[str]:
-    """下载单个视频
-    
-    Args:
-        info: 视频信息字典
-        folder_path: 根文件夹路径
-        resolution: 目标分辨率
-        
-    Returns:
-        下载文件夹路径，失败则返回 None
-    """
+def download_single_video(info, folder_path, resolution='1080p'):
+    """下载单个视频"""
     sanitized_title = sanitize_title(info.get('title', 'Unknown'))
     sanitized_uploader = sanitize_title(info.get('uploader', 'Unknown'))
     upload_date = info.get('upload_date', 'Unknown')
-    
     if upload_date == 'Unknown':
         logger.warning(f'No upload date found for video: {sanitized_title}')
         return None
-
-    output_folder = os.path.join(
-        folder_path,
-        sanitized_uploader,
-        f'{upload_date} {sanitized_title}'
-    )
     
-    # 检查是否已下载
+    output_folder = os.path.join(folder_path, sanitized_uploader, f'{upload_date} {sanitized_title}')
     if os.path.exists(os.path.join(output_folder, 'download.mp4')):
         logger.info(f'Video already downloaded in {output_folder}')
         return output_folder
-
-    # 获取 cookies 配置
-    cookies_opts = _get_cookies_options()
-
-    # 准备下载选项
+    
+    # 获取 cookies 文件路径
+    cookies_file = _get_cookies_file()
+    
     resolution_value = resolution.replace('p', '')
     ydl_opts = {
-        'format': (
-            f'bestvideo[ext=mp4][height<={resolution_value}]+bestaudio[ext=m4a]/'
-            f'best[ext=mp4]/best'
-        ),
+        'format': f'bestvideo[ext=mp4][height<={resolution_value}]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'writeinfojson': True,
         'writethumbnail': True,
         'outtmpl': os.path.join(output_folder, 'download'),
         'ignoreerrors': True,
-        **cookies_opts  # 添加 cookies 配置
     }
-
-    # 下载视频
-    logger.info(f'Downloading video: {sanitized_title}')
+    
+    # 添加 cookies（使用 cookiefile，这是 yt-dlp 支持的参数名）
+    if cookies_file:
+        ydl_opts['cookiefile'] = cookies_file
+        logger.info(f'使用 cookies 文件: {cookies_file}')
+    
     try:
         webpage_url = info.get('webpage_url') or info.get('url')
         if not webpage_url:
             logger.error(f'No webpage_url found in video info: {sanitized_title}')
             return None
-            
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([webpage_url])
-        logger.info(f'Video downloaded to {output_folder}')
+        logger.info(f'Video downloaded in {output_folder}')
         return output_folder
     except Exception as e:
         logger.error(f'Failed to download video {sanitized_title}: {e}')
         return None
 
-
-def download_videos(
-    info_list: List[Dict[str, Any]],
-    folder_path: str,
-    resolution: str = '1080p'
-) -> None:
-    """下载多个视频
-    
-    Args:
-        info_list: 视频信息列表
-        folder_path: 根文件夹路径
-        resolution: 目标分辨率
-    """
+def download_videos(info_list, folder_path, resolution='1080p'):
     for info in info_list:
         download_single_video(info, folder_path, resolution)
 
-
-def get_info_list_from_url(
-    url: List[str],
-    num_videos: int
-) -> Generator[Dict[str, Any], None, None]:
-    """从 URL 获取视频信息列表
+def _get_cookies_file():
+    """获取 cookies 文件路径
     
-    Args:
-        url: URL 列表
-        num_videos: 要获取的视频数量
-        
-    Yields:
-        视频信息字典
+    Returns:
+        str: cookies 文件路径，如果不存在则返回 None
     """
+    # 优先从环境变量读取
+    cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
+    if cookies_file:
+        cookies_file = os.path.expanduser(cookies_file)
+        cookies_file = os.path.abspath(cookies_file)
+        if os.path.exists(cookies_file):
+            logger.info(f'从环境变量读取 cookies 文件: {cookies_file}')
+            # 预处理 cookies（去掉 BOM、转换换行符）
+            prepared = prepare_cookies(cookies_file, cookies_file)
+            return prepared if prepared else cookies_file
+        else:
+            logger.warning(f'环境变量指定的 cookies 文件不存在: {cookies_file}')
+    
+    # 尝试默认路径
+    default_paths = [
+        os.path.abspath('cookies.txt'),
+        os.path.abspath('../cookies.txt'),
+        os.path.expanduser('~/cookies.txt'),
+    ]
+    
+    for path in default_paths:
+        if os.path.exists(path):
+            logger.info(f'找到默认 cookies 文件: {path}')
+            prepared = prepare_cookies(path, path)
+            return prepared if prepared else path
+    
+    logger.warning('未找到 cookies 文件，可能会遇到 YouTube bot 验证')
+    return None
+
+
+def get_info_list_from_url(url, num_videos):
+    """从 URL 获取视频信息列表（生成器）"""
     if isinstance(url, str):
         url = [url]
 
-    # 获取 cookies 配置
-    cookies_opts = _get_cookies_options()
-
-    for u in url:
-        try:
-            # 检测URL类型：如果包含 watch?v=，视为单个视频；否则视为播放列表
-            is_single_video = 'watch?v=' in u or '/watch/' in u
-            
-            # 准备选项
-            ydl_opts = {
-                'format': 'best',
-                'dumpjson': True,
-                'ignoreerrors': True,
-                **cookies_opts  # 添加 cookies 配置
-            }
-            
-            if is_single_video:
-                # 单个视频：即使URL包含播放列表参数，也只下载该视频
-                ydl_opts['noplaylist'] = True
-            else:
-                # 播放列表：限制下载数量
-                ydl_opts['playlistend'] = num_videos
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                result = ydl.extract_info(u, download=False)
-            
-            # 检查 result 是否为 None
-            if result is None:
-                logger.error(f'Failed to extract info from {u}: extract_info returned None')
-                continue
-            
-            if 'entries' in result:
-                # 播放列表
-                entries = result.get('entries', [])
-                for video_info in entries:
-                    if video_info:  # 过滤掉 None 值
-                        yield video_info
-            else:
-                # 单个视频
-                yield result
-                    
-        except Exception as e:
-            logger.error(f'Failed to extract info from {u}: {e}')
-
-
-def _get_cookies_options() -> Dict[str, Any]:
-    """获取 cookies 配置选项
+    # 获取 cookies 文件
+    cookies_file = _get_cookies_file()
     
-    Returns:
-        cookies 相关配置字典
-    """
-    cookies_opts = {}
+    ydl_opts = {
+        'format': 'best',
+        'dumpjson': True,
+        'playlistend': num_videos,
+        'ignoreerrors': True,
+    }
     
-    # 优先检查环境变量中的 cookies 文件路径
-    cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
-    if cookies_file and os.path.exists(cookies_file):
-        cookies_opts['cookies'] = cookies_file
-        logger.info(f'✓ 使用自定义 cookies 文件: {cookies_file}')
-        return cookies_opts
-    
-    # 尝试从浏览器自动提取 cookies（使用 yt-dlp 的 cookiesfrombrowser）
-    try:
-        system = platform.system()
-        browsers_to_try = []
-        
-        if system == 'Darwin':  # macOS
-            browsers_to_try = ['chrome', 'safari', 'firefox', 'edge']
-        elif system == 'Linux':
-            browsers_to_try = ['chrome', 'chromium', 'firefox', 'opera', 'edge']
-        elif system == 'Windows':
-            browsers_to_try = ['chrome', 'edge', 'firefox', 'opera']
-        
-        # 尝试每个浏览器（直接使用，yt-dlp 会自动处理）
-        for browser in browsers_to_try:
+    # 添加 cookies
+    if cookies_file:
+        ydl_opts['cookiefile'] = cookies_file
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        for u in url:
             try:
-                # 直接设置 cookiesfrombrowser，yt-dlp 会自动查找浏览器
-                cookies_opts['cookiesfrombrowser'] = (browser,)
-                logger.info(f'尝试使用 {browser} 浏览器的 cookies...')
-                # 直接返回，让 yt-dlp 在实际使用时处理
-                logger.info(f'✓ 将尝试使用 {browser} 浏览器的 cookies')
-                return cookies_opts
-            except Exception as e:
-                logger.debug(f'{browser} 浏览器不可用: {e}')
-                continue
-        
-        # 如果所有浏览器都不可用，尝试检查 Chrome cookies 文件是否存在
-        system = platform.system()
-        chrome_paths = []
-        if system == 'Darwin':
-            chrome_paths = [
-                os.path.expanduser('~/Library/Application Support/Google/Chrome/Default/Cookies'),
-                os.path.expanduser('~/Library/Application Support/Google/Chrome/Profile 1/Cookies')
-            ]
-        elif system == 'Linux':
-            chrome_paths = [
-                os.path.expanduser('~/.config/google-chrome/Default/Cookies'),
-                os.path.expanduser('~/.config/google-chrome/Profile 1/Cookies'),
-                os.path.expanduser('~/.config/chromium/Default/Cookies')
-            ]
-        elif system == 'Windows':
-            chrome_paths = [
-                os.path.expanduser('~/AppData/Local/Google/Chrome/User Data/Default/Cookies'),
-                os.path.expanduser('~/AppData/Local/Google/Chrome/User Data/Profile 1/Cookies')
-            ]
-        
-        for chrome_path in chrome_paths:
-            if os.path.exists(chrome_path):
-                cookies_opts['cookiesfrombrowser'] = ('chrome',)
-                logger.info(f'✓ 检测到 Chrome cookies 文件，将使用 Chrome cookies')
-                return cookies_opts
+                result = ydl.extract_info(u, download=False)
+                if result is None:
+                    logger.error(f'extract_info 返回 None for URL: {u}')
+                    continue
                 
-    except Exception as e:
-        logger.debug(f'无法自动检测浏览器 cookies: {e}')
-    
-    # 如果都没有，返回空字典（不使用 cookies）
-    logger.warning('⚠ 未检测到浏览器 cookies，可能会遇到 YouTube bot 验证')
-    logger.warning('解决方案：')
-    logger.warning('1. 设置环境变量: export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
-    logger.warning('2. 使用浏览器扩展导出 cookies（推荐）：')
-    logger.warning('   - Chrome/Edge: 安装 "Get cookies.txt LOCALLY" 扩展')
-    logger.warning('   - 登录 YouTube -> 点击扩展 -> 导出 cookies.txt')
-    logger.warning('   - 然后运行: export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
-    logger.warning('3. 查看详细指南: cat COOKIES_GUIDE.md')
-    return cookies_opts
+                if 'entries' in result:
+                    # Playlist
+                    for video_info in result.get('entries', []):
+                        if video_info:
+                            yield video_info
+                else:
+                    # Single video
+                    yield result
+            except Exception as e:
+                logger.error(f'Failed to extract info from {u}: {e}')
+                # 如果 Python API 失败，尝试命令行
+                try:
+                    result = _extract_info_via_cli(u, cookies_file)
+                    if result:
+                        if 'entries' in result:
+                            for video_info in result.get('entries', []):
+                                if video_info:
+                                    yield video_info
+                        else:
+                            yield result
+                except Exception as cli_error:
+                    logger.error(f'命令行方式也失败: {cli_error}')
 
-
-def download_from_url(
-    url: str,
-    folder_path: str,
-    resolution: str = '1080p',
-    num_videos: int = 5
-) -> None:
-    """从 URL 下载视频
+def _extract_info_via_cli(url, cookies_file=None):
+    """使用命令行方式提取视频信息（作为 Python API 的备用方案）
     
     Args:
-        url: 视频或播放列表 URL
-        folder_path: 输出文件夹路径
-        resolution: 目标分辨率
-        num_videos: 要下载的视频数量
+        url: 视频 URL
+        cookies_file: cookies 文件路径
+        
+    Returns:
+        视频信息字典，失败返回 None
     """
+    # 检查 yt-dlp 命令是否可用
+    ytdlp_cmd = shutil.which('yt-dlp')
+    if not ytdlp_cmd:
+        ytdlp_cmd = shutil.which('youtube-dl')
+    
+    if not ytdlp_cmd:
+        logger.error('❌ 未找到 yt-dlp 或 youtube-dl 命令')
+        return None
+    
+    logger.info(f'使用命令行工具提取信息: {ytdlp_cmd}')
+    
+    # 构建命令行参数
+    cmd = [ytdlp_cmd, '--dump-json', '--no-warnings', '--no-playlist']
+    
+    # 添加 cookies
+    if cookies_file and os.path.exists(cookies_file):
+        cmd.extend(['--cookies', cookies_file])
+        logger.info(f'命令行使用 cookies: {cookies_file}')
+    
+    # 添加 URL
+    cmd.append(url)
+    
+    # 执行命令
+    try:
+        logger.debug(f'执行命令: {" ".join(cmd)}')
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=300  # 5分钟超时
+        )
+        
+        # 解析 JSON 输出
+        output_lines = result.stdout.strip().split('\n')
+        for line in output_lines:
+            if line.strip():
+                try:
+                    video_info = json.loads(line)
+                    logger.info(f'✓ 命令行成功提取视频信息: {video_info.get("title", "Unknown")}')
+                    return video_info
+                except json.JSONDecodeError:
+                    continue
+        
+        logger.error('❌ 命令行输出无法解析为 JSON')
+        return None
+        
+    except subprocess.TimeoutExpired:
+        logger.error('❌ 命令行执行超时')
+        return None
+    except subprocess.CalledProcessError as e:
+        error_output = e.stderr or e.stdout or str(e)
+        logger.error(f'❌ 命令行执行失败: {error_output}')
+        return None
+    except Exception as e:
+        logger.error(f'❌ 命令行执行异常: {e}')
+        return None
+
+
+def download_from_url(url, folder_path, resolution='1080p', num_videos=5):
+    """从 URL 下载视频"""
     if isinstance(url, str):
         url = [url]
 
     logger.info(f'Fetching video information from {len(url)} URL(s)')
     
-    # 获取 cookies 配置
-    cookies_opts = _get_cookies_options()
+    # 获取 cookies 文件
+    cookies_file = _get_cookies_file()
     
+    # 检测URL类型：如果包含 watch?v=，视为单个视频；否则视为播放列表
     video_info_list = []
     for u in url:
+        is_single_video = 'watch?v=' in u or '/watch/' in u
+        
+        ydl_opts = {
+            'format': 'best',
+            'dumpjson': True,
+            'ignoreerrors': False,  # 改为 False 以便捕获真实错误
+        }
+        
+        # 添加 cookies
+        if cookies_file:
+            ydl_opts['cookiefile'] = cookies_file
+            logger.info(f'使用 cookies 文件: {cookies_file}')
+        
+        # 添加播放列表选项
+        if is_single_video:
+            ydl_opts['noplaylist'] = True
+            logger.info(f'检测到单个视频 URL: {u}')
+        else:
+            ydl_opts['playlistend'] = num_videos
+            logger.info(f'检测到播放列表 URL，将下载最多 {num_videos} 个视频: {u}')
+        
+        result = None
         try:
-            # 检测URL类型：如果包含 watch?v=，视为单个视频；否则视为播放列表
-            is_single_video = 'watch?v=' in u or '/watch/' in u
-            
-            # 准备选项
-            ydl_opts = {
-                'format': 'best',
-                'dumpjson': True,
-                'ignoreerrors': True,
-                **cookies_opts  # 添加 cookies 配置
-            }
-            
-            if is_single_video:
-                # 单个视频：即使URL包含播放列表参数，也只下载该视频
-                ydl_opts['noplaylist'] = True
-                logger.info(f'Detected single video URL, downloading only this video: {u}')
-            else:
-                # 播放列表：限制下载数量
-                ydl_opts['playlistend'] = num_videos
-                logger.info(f'Detected playlist URL, downloading up to {num_videos} videos')
-            
+            # 先尝试 Python API
+            logger.info('尝试使用 Python API 提取视频信息...')
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 result = ydl.extract_info(u, download=False)
             
-            # 检查 result 是否为 None（下载失败时可能返回 None）
             if result is None:
-                logger.error(f'Failed to extract info from {u}: extract_info returned None (可能是 YouTube bot 验证失败)')
-                logger.error('建议：1. 设置环境变量 YOUTUBE_COOKIES_FILE 指向 cookies.txt 文件')
-                logger.error('      2. 或使用浏览器扩展导出 cookies')
-                continue
+                raise ValueError('extract_info returned None')
             
-            # 检查是否是播放列表
-            if 'entries' in result:
-                # 播放列表
-                entries = result.get('entries', [])
-                if entries:
-                    video_info_list.extend([v for v in entries if v])
-                else:
-                    logger.warning(f'播放列表为空: {u}')
-            else:
-                # 单个视频
-                video_info_list.append(result)
-                    
-        except yt_dlp.utils.ExtractorError as e:
-            error_msg = str(e)
+            logger.info(f'✓ Python API 成功提取视频信息')
+            
+        except (yt_dlp.utils.ExtractorError, ValueError, Exception) as api_error:
+            error_msg = str(api_error)
+            logger.warning(f'⚠ Python API 提取失败: {error_msg}')
+            
+            # 如果是 bot 验证错误，尝试命令行
             if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
-                logger.error(f'❌ YouTube bot 验证失败: {u}')
-                logger.error('')
-                logger.error('当前 cookies 配置：')
-                if 'cookiesfrombrowser' in cookies_opts:
-                    browser = cookies_opts['cookiesfrombrowser'][0] if isinstance(cookies_opts['cookiesfrombrowser'], (list, tuple)) else str(cookies_opts['cookiesfrombrowser'])
-                    logger.error(f'  - 使用浏览器: {browser} (cookiesfrombrowser)')
-                elif 'cookies' in cookies_opts:
-                    logger.error(f'  - Cookies 文件: {cookies_opts["cookies"]}')
-                else:
-                    logger.error('  - 未配置 cookies')
-                logger.error('')
-                logger.error('解决方案：')
-                logger.error('1. 【推荐】使用浏览器扩展导出 cookies.txt:')
-                logger.error('   - Chrome/Edge: 安装 "Get cookies.txt LOCALLY" 扩展')
-                logger.error('   - Firefox: 安装 "cookies.txt" 扩展')
-                logger.error('   - 登录 YouTube -> 点击扩展图标 -> 导出 cookies.txt')
-                logger.error('   - 设置: export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
-                logger.error('')
-                logger.error('2. 或手动设置环境变量:')
-                logger.error('   export YOUTUBE_COOKIES_FILE=/path/to/cookies.txt')
-                logger.error('')
-                logger.error('3. 查看详细指南: cat COOKIES_GUIDE.md')
+                logger.info('检测到 bot 验证错误，切换到命令行方式...')
+                result = _extract_info_via_cli(u, cookies_file)
             else:
-                logger.error(f'Failed to extract info from {u}: {e}')
-        except Exception as e:
-            logger.error(f'Failed to extract info from {u}: {e}')
-            import traceback
-            logger.debug(traceback.format_exc())
+                # 其他错误也尝试命令行
+                logger.info('尝试使用命令行方式作为备用方案...')
+                result = _extract_info_via_cli(u, cookies_file)
+        
+        if result is None:
+            logger.error(f'❌ 所有方法都失败，无法提取视频信息: {u}')
+            continue
+        
+        # 处理结果
+        if 'entries' in result:
+            # Playlist
+            entries = result.get('entries', [])
+            if entries:
+                video_info_list.extend([v for v in entries if v])
+            else:
+                logger.warning(f'播放列表为空: {u}')
+        else:
+            # Single video
+            video_info_list.append(result)
 
     # 下载视频
     logger.info(f'Downloading {len(video_info_list)} video(s)')
@@ -389,7 +358,7 @@ def download_from_url(
 
 
 if __name__ == '__main__':
-    # 示例用法
-    test_url = 'https://www.youtube.com/watch?v=3LPJfIKxwWc'
-    test_folder = 'videos'
-    download_from_url(test_url, test_folder)
+    # Example usage
+    url = 'https://www.youtube.com/watch?v=3LPJfIKxwWc'
+    folder_path = 'videos'
+    download_from_url(url, folder_path, resolution='1080p', num_videos=1)

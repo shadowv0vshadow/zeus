@@ -881,8 +881,53 @@ def generate_tts_with_config(folder, tts_model, aliyun_voice_str, segments_df):
         return tts_result + f"\n\n❌ audio_combined.wav 生成失败: {str(e)}\n{traceback.format_exc()}"
 
 def refresh_projects_for_tts(folder):
-    """刷新项目列表（用于TTS界面）"""
-    projects = get_all_projects(folder)
+    """刷新项目列表（用于TTS界面）
+    只要求有 translation.json 即可，不要求有 wavs 文件夹
+    （因为用户可能还没生成TTS音频）
+    """
+    projects = []
+    
+    if not os.path.exists(folder):
+        return gr.Dropdown(choices=[], value=None), {}
+    
+    # 扫描所有包含 translation.json 的文件夹
+    for root, dirs, files in os.walk(folder):
+        translation_path = os.path.join(root, 'translation.json')
+        if os.path.exists(translation_path):
+            # 获取项目名称（相对路径）
+            project_name = os.path.relpath(root, folder)
+            
+            # 获取项目标题（从 download.info.json 或 translation.json）
+            title = project_name
+            info_path = os.path.join(root, 'download.info.json')
+            if os.path.exists(info_path):
+                try:
+                    with open(info_path, 'r', encoding='utf-8') as f:
+                        info = json.load(f)
+                        title = info.get('title', project_name)
+                except:
+                    pass
+            else:
+                # 如果没有 download.info.json，尝试从 translation.json 读取标题
+                try:
+                    with open(translation_path, 'r', encoding='utf-8') as f:
+                        translation_data = json.load(f)
+                        if isinstance(translation_data, list) and len(translation_data) > 0:
+                            # 尝试从第一个片段的元数据获取标题
+                            first_segment = translation_data[0]
+                            if isinstance(first_segment, dict) and 'metadata' in first_segment:
+                                metadata = first_segment['metadata']
+                                if isinstance(metadata, dict) and 'title' in metadata:
+                                    title = metadata['title']
+                except:
+                    pass
+            
+            projects.append({
+                'path': root,
+                'name': project_name,
+                'title': title,
+            })
+    
     project_choices = [f"{p['name']} - {p['title'][:50]}" for p in projects]
     project_paths = {f"{p['name']} - {p['title'][:50]}": p['path'] for p in projects}
     return gr.Dropdown(choices=project_choices, value=project_choices[0] if project_choices else None), project_paths
