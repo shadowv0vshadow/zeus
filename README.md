@@ -210,8 +210,148 @@ git clone https://github.com/liuzhao1225/YouDub-webui.git
 在视频处理方面，我们依然强调音视频的同步处理。我们的目标是确保音频与视频画面的完美对齐，并生成准确的字幕，从而为用户提供一个无缝且沉浸式的观看体验。我们的处理流程和技术确保了视频内容的高质量和观看的连贯性。
 
 
+## 代码格式化和检查
+
+本项目使用现代化的 Python 代码规范工具来确保代码质量和一致性：
+
+### 使用的工具
+
+1. **Ruff** - 超快的 Python linter 和代码检查工具
+   - 替代了 flake8, isort, pylint 等多个工具
+   - 速度极快（用 Rust 编写）
+   - 支持自动修复
+
+2. **Black** - Python 代码格式化工具
+   - 自动格式化代码，确保风格一致
+   - 行长度限制：120 字符
+
+3. **Pre-commit** - Git hooks 自动检查
+   - 提交代码前自动运行格式化和检查
+   - 确保所有提交的代码都符合规范
+
+### 快速开始
+
+#### 1. 安装工具
+
+```bash
+pip install black ruff pre-commit
+```
+
+#### 2. 使用方式
+
+**方式一：使用 Makefile（推荐）**
+
+```bash
+# 格式化代码
+make format
+
+# 检查代码
+make lint
+
+# 自动修复问题
+make fix
+
+# 运行所有检查
+make check
+
+# 安装 pre-commit hooks（首次运行）
+make install-hooks
+```
+
+**方式二：使用脚本**
+
+```bash
+# 给脚本添加执行权限
+chmod +x format_code.sh
+
+# 格式化代码
+./format_code.sh format
+
+# 检查代码
+./format_code.sh lint
+
+# 自动修复
+./format_code.sh fix
+
+# 运行检查（不修改文件）
+./format_code.sh check
+```
+
+**方式三：直接使用命令**
+
+```bash
+# Black 格式化
+black --line-length=120 youdub app.py
+
+# Ruff 检查
+ruff check youdub app.py
+
+# Ruff 自动修复
+ruff check --fix youdub app.py
+```
+
+#### 3. 配置 Pre-commit（可选但推荐）
+
+安装 pre-commit hooks 后，每次 `git commit` 前会自动运行格式化和检查：
+
+```bash
+# 安装 hooks
+pre-commit install
+
+# 手动运行所有文件的检查
+pre-commit run --all-files
+```
+
+### 配置文件说明
+
+- **`pyproject.toml`** - 包含 Black、Ruff 和 Mypy 的配置
+- **`.pre-commit-config.yaml`** - Pre-commit hooks 配置
+- **`Makefile`** - 便捷的命令集合
+- **`format_code.sh`** - Shell 脚本封装
+
+### IDE 集成
+
+**VS Code:**
+1. 安装扩展：
+   - `ms-python.black-formatter`
+   - `charliermarsh.ruff`
+2. 在 `.vscode/settings.json` 中添加：
+```json
+{
+  "python.formatting.provider": "black",
+  "python.formatting.blackArgs": ["--line-length=120"],
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit"
+    }
+  }
+}
+```
+
+**PyCharm:**
+1. Settings → Tools → External Tools
+2. 添加 Black 和 Ruff 作为外部工具
+3. 或在 Settings → Editor → Code Style → Python 中配置 Black
+
+### 规则说明
+
+- **行长度**: 120 字符（可根据需要调整）
+- **导入排序**: 自动按 isort 规则排序
+- **命名规范**: 遵循 PEP 8
+- **代码简化**: 自动检测可以简化的代码
+
+更多配置选项请查看 `pyproject.toml` 文件。
+
 ## 贡献指南
+
 欢迎对 `YouDub-webui` 进行贡献。您可以通过 [GitHub Issues](https://github.com/liuzhao1225/YouDub-webui/issues) 或 [Pull Request](https://github.com/liuzhao1225/YouDub-webui/pulls) 提交改进建议或报告问题。
+
+**提交代码前，请确保：**
+1. 代码已通过格式化和检查：`make check` 或 `./format_code.sh check`
+2. 所有测试通过（如果有的话）
+3. 遵循项目的代码风格
 
 ## 许可协议
 `YouDub-webui` 遵循 Apache License 2.0。使用本工具时，请确保遵守相关的法律和规定，包括版权法、数据保护法和隐私法。未经原始内容创作者和/或版权所有者许可，请勿使用此工具。

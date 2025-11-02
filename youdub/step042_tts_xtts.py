@@ -8,11 +8,11 @@ from .utils import save_wav
 
 # 设置 TTS 模型存储目录到项目的 models/TTS 目录
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-tts_models_dir = os.path.join(project_root, 'models', 'TTS')
+tts_models_dir = os.path.join(project_root, "models", "TTS")
 # 设置 XDG_DATA_HOME 环境变量，让 TTS 库从项目目录查找模型
 # Coqui TTS 会在 XDG_DATA_HOME/tts 目录下查找模型（使用 -- 分隔符的目录名）
-if 'XDG_DATA_HOME' not in os.environ:
-    os.environ['XDG_DATA_HOME'] = tts_models_dir
+if "XDG_DATA_HOME" not in os.environ:
+    os.environ["XDG_DATA_HOME"] = tts_models_dir
 # 确保目录存在
 os.makedirs(tts_models_dir, exist_ok=True)
 
@@ -23,16 +23,16 @@ def init_TTS():
     load_model()
 
 
-def load_model(model_path="tts_models/multilingual/multi-dataset/xtts_v2", device='auto'):
+def load_model(model_path="tts_models/multilingual/multi-dataset/xtts_v2", device="auto"):
     global model
     # 如果已经加载了相同的模型，不需要重新加载
     # 注意：这里简化处理，实际可能需要检查模型路径是否相同
     if model is not None:
         return
-    
-    if device == 'auto':
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f'Loading TTS model from {model_path}')
+
+    if device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Loading TTS model from {model_path}")
     t_start = time.time()
 
     from torch.serialization import add_safe_globals
@@ -53,26 +53,35 @@ def load_model(model_path="tts_models/multilingual/multi-dataset/xtts_v2", devic
     )
 
     # ====== 一次性加入所有可信类 ======
-    add_safe_globals([
-        XttsConfig,
-        XttsAudioConfig,
-        XttsArgs,
-        BaseDatasetConfig,
-        BaseAudioConfig,
-        BaseTTSConfig,
-        CharactersConfig,
-    ])
+    add_safe_globals(
+        [
+            XttsConfig,
+            XttsAudioConfig,
+            XttsArgs,
+            BaseDatasetConfig,
+            BaseAudioConfig,
+            BaseTTSConfig,
+            CharactersConfig,
+        ]
+    )
 
     model = TTS(model_path).to(device)
     t_end = time.time()
-    logger.info(f'TTS model loaded in {t_end - t_start:.2f}s')
+    logger.info(f"TTS model loaded in {t_end - t_start:.2f}s")
 
 
-def tts(text, output_path, speaker_wav, model_name="tts_models/multilingual/multi-dataset/xtts_v2", device='auto', language='zh-cn'):
+def tts(
+    text,
+    output_path,
+    speaker_wav,
+    model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+    device="auto",
+    language="zh-cn",
+):
     global model
 
     if os.path.exists(output_path):
-        logger.info(f'TTS {text} 已存在')
+        logger.info(f"TTS {text} 已存在")
         return
 
     if model is None:
@@ -83,15 +92,17 @@ def tts(text, output_path, speaker_wav, model_name="tts_models/multilingual/mult
             wav = model.tts(text, speaker_wav=speaker_wav, language=language)
             wav = np.array(wav)
             save_wav(wav, output_path)
-            logger.info(f'TTS {text}')
+            logger.info(f"TTS {text}")
             break
         except Exception as e:
-            logger.warning(f'TTS {text} 失败')
+            logger.warning(f"TTS {text} 失败")
             logger.warning(e)
 
 
-if __name__ == '__main__':
-    speaker_wav = r'videos\TED-Ed\20231121 Why did the US try to kill all the bison？ - Andrew C. Isenberg\audio_vocals.wav'
+if __name__ == "__main__":
+    speaker_wav = (
+        r"videos\TED-Ed\20231121 Why did the US try to kill all the bison？ - Andrew C. Isenberg\audio_vocals.wav"
+    )
     while True:
-        text = input('请输入：')
-        tts(text, f'playground/{text}.wav', speaker_wav)
+        text = input("请输入：")
+        tts(text, f"playground/{text}.wav", speaker_wav)

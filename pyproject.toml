@@ -1,0 +1,143 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youdub-webui"
+version = "1.0.0"
+description = "AI-powered video translation and dubbing tool"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Black 代码格式化配置
+[tool.black]
+line-length = 120
+target-version = ['py310']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | models
+  | videos
+)/
+'''
+
+# Ruff Linter 配置（替代 flake8, isort, pylint 等）
+[tool.ruff]
+# 行长度限制（与 Black 保持一致）
+line-length = 120
+target-version = "py310"
+
+# 允许的目录（排除某些目录）
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    "build",
+    "dist",
+    "models",
+    "videos",
+    "*.egg-info",
+]
+
+# Linter 配置
+[tool.ruff.lint]
+# 要检查的规则集合
+# E: pycodestyle errors (PEP 8 错误)
+# W: pycodestyle warnings (PEP 8 警告)
+# F: Pyflakes (未使用的导入、变量等)
+# I: isort (导入排序)
+# N: pep8-naming (命名规范)
+# UP: pyupgrade (现代化 Python 语法)
+# B: flake8-bugbear (常见 bug)
+# C4: flake8-comprehensions (列表推导式优化)
+# SIM: flake8-simplify (简化代码)
+# TID: flake8-tidy-imports (导入整理)
+# ARG: flake8-unused-arguments (未使用的参数)
+# PTH: flake8-use-pathlib (使用 pathlib)
+# RUF: Ruff 特定规则
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "ARG",  # flake8-unused-arguments
+    "PTH",  # flake8-use-pathlib
+    "RUF",  # Ruff-specific rules
+]
+
+# 要忽略的规则
+ignore = [
+    "E501",   # 行长度（由 Black 处理）
+    "E203",   # 冒号前空格（与 Black 冲突）
+    "PLR0913", # 函数参数过多（对于某些函数是合理的）
+    "PLR2004", # 魔术值比较（某些情况下是合理的）
+    "ARG001",  # 未使用的函数参数（某些情况下是接口要求）
+    "ARG002",  # 未使用的方法参数（某些情况下是接口要求）
+]
+
+# 每个文件的忽略规则（可以针对特定文件放宽规则）
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # 允许未使用的导入（用于 __init__.py）
+"tests/*" = ["ARG", "S101"]  # 测试文件允许未使用的参数和断言
+
+# isort 配置（导入排序）
+[tool.ruff.lint.isort]
+known-first-party = ["youdub"]
+force-single-line = false
+force-sort-within-sections = true
+
+# pyupgrade 配置（现代化 Python 语法）
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+# mypy 类型检查配置（可选）
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "yt_dlp.*",
+    "gradio.*",
+    "loguru.*",
+    "librosa.*",
+    "soundfile.*",
+    "demucs.*",
+    "whisperx.*",
+    "TTS.*",
+    "dashscope.*",
+    "bilibili_toolman.*",
+]
+ignore_missing_imports = true
+

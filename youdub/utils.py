@@ -14,10 +14,10 @@ from scipy.io import wavfile
 
 def sanitize_filename(filename: str) -> str:
     """清理文件名，移除非法字符
-    
+
     Args:
         filename: 原始文件名
-        
+
     Returns:
         清理后的文件名
     """
@@ -25,17 +25,17 @@ def sanitize_filename(filename: str) -> str:
     valid_chars = f"-_.() {string.ascii_letters}{string.digits}"
 
     # 只保留合法字符
-    sanitized_filename = ''.join(c for c in filename if c in valid_chars)
+    sanitized_filename = "".join(c for c in filename if c in valid_chars)
 
     # 将多个连续空格替换为单个空格
-    sanitized_filename = re.sub(r' +', ' ', sanitized_filename)
+    sanitized_filename = re.sub(r" +", " ", sanitized_filename)
 
     return sanitized_filename.strip()
 
 
 def save_wav(wav: np.ndarray, output_path: str, sample_rate: int = 24000) -> None:
     """保存音频为 WAV 文件（不进行归一化）
-    
+
     Args:
         wav: 音频数据（numpy 数组）
         output_path: 输出文件路径
@@ -49,9 +49,9 @@ def save_wav(wav: np.ndarray, output_path: str, sample_rate: int = 24000) -> Non
 
 def save_wav_norm(wav: np.ndarray, output_path: str, sample_rate: int = 24000) -> None:
     """保存音频为 WAV 文件（进行归一化）
-    
+
     将音频归一化到最大振幅后保存
-    
+
     Args:
         wav: 音频数据（numpy 数组）
         output_path: 输出文件路径
@@ -65,7 +65,7 @@ def save_wav_norm(wav: np.ndarray, output_path: str, sample_rate: int = 24000) -
 
 def normalize_wav(wav_path: str) -> None:
     """归一化音频文件并覆盖原文件
-    
+
     Args:
         wav_path: WAV 文件路径
     """
