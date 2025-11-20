@@ -533,7 +533,7 @@ def save_translation_edits(project_path, segments_df):
 # 使用 Blocks 来支持动态交互
 with gr.Blocks(title="YouDub - 字幕翻译") as translation_interface:
     gr.Markdown("# 字幕翻译")
-    gr.Markdown("选择项目，查看和编辑翻译文本。可以手动润色翻译结果并保存。")
+    gr.Markdown("选择项目，查看和编辑翻译文本。可以手动润色翻译结果并保存。\n\n**提示：** 可以在表格中勾选\"使用原声\"，然后点击下方的\"自动翻译所有项目\"，系统会自动将勾选状态写入 translation.json（无需点击\"保存翻译\"按钮）。")
 
     # 项目选择
     translation_folder = gr.Textbox(label="Folder", value="videos", info="视频文件夹路径")
@@ -598,7 +598,7 @@ with gr.Blocks(title="YouDub - 字幕翻译") as translation_interface:
 
     gr.Markdown("---")
     gr.Markdown("### 自动翻译")
-    gr.Markdown("使用AI自动翻译所有未翻译的项目。")
+    gr.Markdown("**使用说明：**\n1. 可以先在上方选择项目，在表格中勾选需要\"使用原声\"的片段\n2. 点击\"自动翻译所有项目\"时，会自动使用表格中的勾选状态写入 translation.json")
 
     translation_target_language = gr.Dropdown(
         ["简体中文", "繁体中文", "English", "Deutsch", "Français", "русский"], label="Target Language", value="简体中文"
@@ -614,7 +614,7 @@ with gr.Blocks(title="YouDub - 字幕翻译") as translation_interface:
 
     translation_auto_translate_btn.click(
         fn=translate_all_transcript_under_folder,
-        inputs=[translation_folder, translation_target_language, translation_model_provider],
+        inputs=[translation_folder, translation_target_language, translation_model_provider, translation_table, translation_project_path_state],
         outputs=[translation_auto_output],
     )
 
@@ -1055,13 +1055,13 @@ def refresh_projects_for_tts(folder):
 def load_segments_from_project(project_choice, project_paths_dict):
     """从选定的项目加载片段列表（从translation.json）"""
     if not project_choice or project_choice not in project_paths_dict:
-        return gr.Dataframe(value=[]), "", "请先选择项目"
+        return gr.Dataframe(value=[], headers=["编号", "翻译文本", "使用原声"], datatype=["str", "str", "bool"]), "", "请先选择项目"
 
     project_path = project_paths_dict[project_choice]
 
     segments = get_audio_segments(project_path)
     if not segments:
-        return gr.Dataframe(value=[]), "", "项目中没有找到音频片段（请确保已生成translation.json）"
+        return gr.Dataframe(value=[], headers=["编号", "翻译文本", "使用原声"], datatype=["str", "str", "bool"]), "", "项目中没有找到音频片段（请确保已生成translation.json）"
 
     # 加载已有配置
     config = load_audio_config(project_path)
@@ -1071,14 +1071,16 @@ def load_segments_from_project(project_choice, project_paths_dict):
     for segment in segments:
         segment_id = segment["id"]
         has_original = segment["has_original"]
-        use_original = config.get(segment_id, False) if has_original else False
+        # 从config读取use_original（优先显示JSON中的配置）
+        # 即使原声文件不存在，也显示JSON中的配置状态，让用户知道配置情况
+        use_original = config.get(segment_id, False)
 
         table_data.append([segment_id, segment["translation"], use_original])
 
     project_info = f"项目路径: {project_path}\n音频片段数: {len(segments)}"
 
     return (
-        gr.Dataframe(value=table_data, headers=["编号", "翻译文本", "使用原声"], interactive=True),
+        gr.Dataframe(value=table_data, headers=["编号", "翻译文本", "使用原声"], interactive=True, datatype=["str", "str", "bool"]),
         project_path,
         project_info,
     )

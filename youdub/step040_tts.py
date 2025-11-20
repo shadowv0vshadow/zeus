@@ -36,6 +36,10 @@ def preprocess_text(text: str) -> str:
     Returns:
         处理后的文本
     """
+    # 如果文本为空，直接返回
+    if not text or not text.strip():
+        return text
+    
     # 替换特殊词汇
     text = text.replace("AI", "人工智能")
 
@@ -136,7 +140,36 @@ def generate_wavs(
     full_wav = np.zeros((0,))
     for i, line in enumerate(transcript):
         speaker = line["speaker"]
-        text = preprocess_text(line["translation"])
+        translation_text = line.get("translation", "").strip()
+        
+        # 如果翻译为空，使用原文
+        if not translation_text:
+            logger.warning(f"片段 {i:04d} 的翻译为空，使用原文: {line.get('text', '')[:50]}...")
+            translation_text = line.get("text", "")
+        
+        # 如果原文也为空，创建一个静音文件并继续
+        if not translation_text.strip():
+            logger.warning(f"片段 {i:04d} 的原文和翻译都为空，创建静音文件")
+            output_path = os.path.join(output_folder, f"{str(i).zfill(4)}.wav")
+            # 计算片段时长
+            start = line["start"]
+            end = line["end"]
+            duration = max(0.1, end - start)  # 至少0.1秒
+            silence_samples = int(duration * 24000)
+            save_wav(np.zeros(silence_samples), output_path, sample_rate=24000)
+            
+            # 更新时间信息
+            last_end = len(full_wav) / 24000
+            if start > last_end:
+                full_wav = np.concatenate((full_wav, np.zeros((int((start - last_end) * 24000),))))
+            start = len(full_wav) / 24000
+            line["start"] = start
+            wav = np.zeros(silence_samples)
+            full_wav = np.concatenate((full_wav, wav))
+            line["end"] = start + duration
+            continue
+        
+        text = preprocess_text(translation_text)
         output_path = os.path.join(output_folder, f"{str(i).zfill(4)}.wav")
         speaker_wav = os.path.join(folder, "SPEAKER", f"{speaker}.wav")
 

@@ -938,14 +938,20 @@ def context_translate(understanding, transcript, target_language="简体中文")
    - 音乐专辑名、歌曲名、艺术家名
    - 技术术语缩写（AI, API, CPU, GPU, FPS, BPM 等）
    - 英文大小写、标点符号、格式必须完全保留
-3. 【上下文一致性】在整个翻译过程中，必须保持术语和表达的一致性：
+3. 【音乐术语翻译】以下音乐术语必须使用标准中文翻译：
+   - "shoegaze" 必须翻译为"盯鞋"（这是该音乐流派的官方中文名称）
+   - "post-rock" 必须保留原文 "post-rock"，不要翻译为"后摇"
+   - "dream pop" 翻译为"梦幻流行"
+   - "noise pop" 翻译为"噪音流行"
+   - "proto-shoegaze" 翻译为"前盯鞋"或"盯鞋雏形"
+4. 【上下文一致性】在整个翻译过程中，必须保持术语和表达的一致性：
    - 同一个专有名词在整个视频中必须统一（要么都保留原文，要么都使用同一翻译）
-   - 专业术语的翻译必须前后一致
+   - 专业术语的翻译必须前后一致（特别是"shoegaze"必须统一翻译为"盯鞋"）
    - 风格和语气必须统一连贯
-4. 翻译要自然、流畅、地道，避免翻译腔
-5. 保持原文的情感色彩和语气
-6. 数学公式使用plain text，不使用latex
-7. 人工智能的"agent"翻译为"智能体"
+5. 翻译要自然、流畅、地道，避免翻译腔
+6. 保持原文的情感色彩和语气
+7. 数学公式使用plain text，不使用latex
+8. 人工智能的"agent"翻译为"智能体"
 
 {chr(10).join(professional_rules) if professional_rules else ""}
 
@@ -1255,13 +1261,14 @@ def translate_with_five_steps(understanding, transcript, target_language="简体
     return translations
 
 
-def translate(folder, target_language="简体中文", model_provider=None):
+def translate(folder, target_language="简体中文", model_provider=None, table_use_original_map=None):
     """使用五步法进行视频字幕翻译
 
     Args:
         folder: 视频文件夹路径
         target_language: 目标语言
         model_provider: 模型提供商 ('openai' 或 'aliyun')，如果不提供则使用环境变量配置
+        table_use_original_map: 表格中用户勾选的"使用原声"状态字典 {segment_id: bool}，如果提供则优先使用
 
     Returns:
         是否翻译成功
@@ -1331,18 +1338,48 @@ def translate(folder, target_language="简体中文", model_provider=None):
         # 第二到五步：五步法翻译
         translations = translate_with_five_steps(understanding, transcript, target_language)
 
-        # 组合翻译结果
+        # 组合翻译结果（在分句之前先分配翻译）
         for i, line in enumerate(transcript):
             if i < len(translations):
                 line["translation"] = translations[i]
             else:
                 line["translation"] = line["text"]  # 备用
-            # 初始化use_original字段（默认False，使用AI配音）
-            if "use_original" not in line:
-                line["use_original"] = False
 
-        # 分句处理
+        # 分句处理（分句会保留translation字段）
         transcript = split_sentences(transcript)
+
+        # 检查wavs文件夹是否存在
+        wavs_folder = os.path.join(folder, "wavs")
+        wavs_exists = os.path.exists(wavs_folder)
+
+        # 为每个片段添加id字段并设置use_original字段
+        for i, line in enumerate(transcript):
+            segment_id = f"{i:04d}"
+            # 为每个条目添加id字段
+            line["id"] = segment_id
+            has_original = False
+            
+            # 检查是否有原声文件
+            if wavs_exists:
+                original_file = os.path.join(wavs_folder, f"{segment_id}_original.wav")
+                has_original = os.path.exists(original_file)
+            
+            # 优先使用表格中用户勾选的状态
+            if table_use_original_map is not None:
+                # 尝试多种格式的segment_id
+                use_original = table_use_original_map.get(segment_id, False)
+                if not use_original:
+                    # 尝试不带前导零的格式
+                    try:
+                        segment_num = int(segment_id)
+                        use_original = table_use_original_map.get(str(segment_num), False)
+                    except:
+                        pass
+                # 如果没有原声文件，强制为False
+                line["use_original"] = use_original if has_original else False
+            else:
+                # 默认使用AI配音
+                line["use_original"] = False
 
         # 保存翻译结果
         with open(translation_path, "w", encoding="utf-8") as f:
@@ -1370,13 +1407,15 @@ def translate(folder, target_language="简体中文", model_provider=None):
             MODEL_PROVIDER = original_global_provider
 
 
-def translate_all_transcript_under_folder(folder, target_language, model_provider=None):
+def translate_all_transcript_under_folder(folder, target_language, model_provider=None, segments_table=None, current_project_path=None):
     """翻译文件夹下所有视频的字幕
 
     Args:
         folder: 文件夹路径
         target_language: 目标语言
         model_provider: 模型提供商 ('openai' 或 'aliyun')，如果不提供则使用环境变量配置
+        segments_table: 表格数据（包含用户勾选的"使用原声"状态）
+        current_project_path: 当前选中的项目路径（如果表格中有数据，则使用表格中的勾选状态）
     """
     # 如果提供了 model_provider，临时设置环境变量
     original_provider = None
@@ -1384,11 +1423,70 @@ def translate_all_transcript_under_folder(folder, target_language, model_provide
         original_provider = os.getenv("MODEL_PROVIDER")
         os.environ["MODEL_PROVIDER"] = model_provider
 
+    # 从表格数据中提取用户勾选的"使用原声"状态（如果表格中有数据）
+    table_use_original_map = {}
+    if segments_table is not None and current_project_path:
+        try:
+            # 处理Gradio Dataframe格式的数据
+            # Gradio可能发送嵌套的数据结构: [null, {"headers": [...], "data": [[...], [...]], "metadata": null}]
+            if isinstance(segments_table, list) and len(segments_table) >= 2:
+                if segments_table[0] is None and isinstance(segments_table[1], dict):
+                    if "data" in segments_table[1]:
+                        segments_table = segments_table[1]["data"]
+            elif isinstance(segments_table, dict):
+                if "data" in segments_table:
+                    segments_table = segments_table["data"]
+                    if isinstance(segments_table, list) and len(segments_table) > 0:
+                        if isinstance(segments_table[0], dict) and "data" in segments_table[0]:
+                            segments_table = segments_table[0]["data"]
+            
+            # 处理Dataframe格式的数据
+            if hasattr(segments_table, 'values'):
+                segments_table = segments_table.values.tolist()
+            elif hasattr(segments_table, 'tolist'):
+                segments_table = segments_table.tolist()
+            
+            if segments_table and len(segments_table) > 0:
+                logger.info(f"从表格中提取\"使用原声\"状态，共 {len(segments_table)} 行数据")
+                for row_idx, row in enumerate(segments_table):
+                    if hasattr(row, "tolist"):
+                        row = row.tolist()
+                    elif not isinstance(row, (list, tuple)):
+                        continue
+                    
+                    if len(row) >= 4:  # 编号, 原文, 翻译, 使用原声
+                        segment_id = str(row[0]).strip()
+                        use_original = row[3] if len(row) > 3 else False
+                        
+                        # 处理布尔值
+                        if isinstance(use_original, bool):
+                            table_use_original_map[segment_id] = use_original
+                        elif isinstance(use_original, str):
+                            table_use_original_map[segment_id] = use_original.lower().strip() in ("true", "1", "yes", "✓", "checked")
+                        elif isinstance(use_original, (int, float)):
+                            table_use_original_map[segment_id] = bool(use_original)
+                        else:
+                            table_use_original_map[segment_id] = False
+                
+                logger.info(f"成功提取 {len(table_use_original_map)} 个片段的\"使用原声\"状态")
+        except Exception as e:
+            logger.warning(f"解析表格数据失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+    
     try:
+        translated_count = 0
+        skipped_count = 0
         for root, dirs, files in os.walk(folder):
             if "transcript.json" in files and "translation.json" not in files:
-                translate(root, target_language, model_provider=model_provider)
-        return f"Translated all videos under {folder}"
+                # 判断是否使用表格中的勾选状态
+                use_table_config = (current_project_path and os.path.abspath(root) == os.path.abspath(current_project_path) and table_use_original_map)
+                
+                if translate(root, target_language, model_provider=model_provider, table_use_original_map=table_use_original_map if use_table_config else None):
+                    translated_count += 1
+                else:
+                    skipped_count += 1
+        return f"✅ 翻译完成！\n已翻译: {translated_count} 个项目\n跳过: {skipped_count} 个项目"
     finally:
         # 恢复原始配置
         if original_provider is not None:

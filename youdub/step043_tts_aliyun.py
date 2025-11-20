@@ -232,6 +232,14 @@ def tts(text, output_path, speaker_wav=None, model="cosyvoice-v2", language="zh"
     if os.path.exists(output_path):
         logger.info(f"阿里云百练TTS {text} 已存在")
         return
+    
+    # 检查文本是否为空
+    if not text or not text.strip():
+        logger.warning(f"文本为空，创建静音文件: {output_path}")
+        # 创建0.1秒的静音文件
+        silence = np.zeros(int(0.1 * 24000))
+        sf.write(output_path, silence, 24000, format="WAV")
+        return
 
     if not DASHSCOPE_AVAILABLE:
         error_msg = (

@@ -121,8 +121,18 @@ def generate_srt(
             end = format_timestamp(item["end"] / speed_up)
             text = item["translation"]
 
-            # 去除末尾的句号（中文句号、英文句号等）
-            text = text.rstrip("。.！!？?")
+            # 去除末尾的所有标点符号（包括中文和英文标点）
+            # 包括：句号、问号、感叹号、逗号、分号、冒号、引号等
+            punctuation_chars = (
+                "。.！!？?，,；;：:、"  # 基本标点
+                + '"'  # 英文双引号
+                + "'"  # 英文单引号
+                + '"'  # 中文左双引号
+                + "'"  # 中文左单引号
+                + '"'  # 中文右双引号
+                + "'"  # 中文右单引号
+            )
+            text = text.rstrip(punctuation_chars)
 
             # 如果文本为空，跳过
             if not text.strip():
@@ -134,7 +144,15 @@ def generate_srt(
 
             # 按行分割文本
             text_lines = [text[j * chars_per_line : (j + 1) * chars_per_line] for j in range(num_lines)]
+            # 确保每行末尾也不带标点符号
+            text_lines = [line.rstrip(punctuation_chars) for line in text_lines]
+            # 过滤掉空行
+            text_lines = [line for line in text_lines if line.strip()]
             formatted_text = "\n".join(text_lines)
+            
+            # 如果所有行都被过滤掉了，跳过这条字幕
+            if not formatted_text.strip():
+                continue
 
             # 写入 SRT 格式
             f.write(f"{i + 1}\n")
@@ -209,7 +227,7 @@ def convert_resolution(aspect_ratio: float, resolution: str = "1080p") -> Tuple[
 
 
 def synthesize_video(
-    folder: str, subtitles: bool = True, speed_up: float = 1.05, fps: int = 30, resolution: str = "1080p"
+    folder: str, subtitles: bool = True, speed_up: float = 1.0, fps: int = 30, resolution: str = "1080p"
 ) -> None:
     """合成最终视频
 
@@ -323,7 +341,7 @@ def synthesize_video(
 
 
 def synthesize_all_video_under_folder(
-    folder: str, subtitles: bool = True, speed_up: float = 1.05, fps: int = 30, resolution: str = "1080p"
+    folder: str, subtitles: bool = True, speed_up: float = 1.0, fps: int = 30, resolution: str = "1080p"
 ) -> str:
     """合成指定文件夹下的所有视频
 

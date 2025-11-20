@@ -231,11 +231,17 @@ def upload_video(folder: str) -> bool:
                     raise Exception("无法获取 video_endpoint，视频上传可能失败")
 
             except KeyError as ke:
-                logger.error(f"上传失败: KeyError: {ke}")
-                raise Exception(f"上传失败 (KeyError: {ke})，请检查网络和 Cookie")
+                error_msg = f"上传失败 (KeyError: {ke})，请检查网络和 Cookie"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             except Exception as upload_error:
-                logger.error(f"上传失败: {upload_error}")
-                raise
+                # 安全地获取错误信息，避免引用未定义的变量
+                try:
+                    error_msg = str(upload_error)
+                except Exception:
+                    error_msg = f"上传失败: {type(upload_error).__name__}"
+                logger.error(f"上传失败: {error_msg}")
+                raise Exception(error_msg) from upload_error
 
             # 创建投稿对象
             submission = Submission(title=title, desc=description)
